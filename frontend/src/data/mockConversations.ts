@@ -21,6 +21,24 @@ export const INITIAL_CONVERSATIONS: Conversation[] = [
     updatedAt: now - 1000 * 60 * 5,
     plannerId: BOY_WHO_CRIED_WOLF_PLANNER.id,
     interviewStep: 'planned',
+    intakeState: {
+      projectId: 'proj_my_stories',
+      conversationId: 'conv_boy_who_cried_wolf',
+      storyTitle: { value: 'The Boy Who Cried Wolf', provided: true, confirmed: true },
+      visualStyle: { value: 'Cinematic realism', provided: true, confirmed: true },
+      storyContext: {
+        value:
+          'Bored on a quiet hillside, a young shepherd stages a wolf attack for thrills—only to face silent village disbelief when a real predator emerges from the dusk.',
+        provided: true,
+        confirmed: true,
+      },
+      missingFields: [],
+      currentQuestion: null,
+      status: 'completed',
+      awaitingConfirmation: false,
+      generationStarted: true,
+      updatedAt: now - 1000 * 60 * 5,
+    },
     storyDraft: {
       title: 'The Boy Who Cried Wolf',
       premise:
@@ -61,6 +79,23 @@ export const INITIAL_CONVERSATIONS: Conversation[] = [
     createdAt: now - 1000 * 60 * 120,
     updatedAt: now - 1000 * 60 * 90,
     interviewStep: 'visual_style',
+    intakeState: {
+      projectId: 'proj_my_stories',
+      conversationId: 'conv_shadow_within',
+      storyTitle: { value: 'The Shadow Within', provided: true, confirmed: true },
+      visualStyle: { value: 'Dark fantasy', provided: true, confirmed: true },
+      storyContext: {
+        value: 'A girl discovers that her shadow has a life of its own.',
+        provided: true,
+        confirmed: true,
+      },
+      missingFields: [],
+      currentQuestion: null,
+      status: 'completed',
+      awaitingConfirmation: false,
+      generationStarted: true,
+      updatedAt: now - 1000 * 60 * 90,
+    },
     storyDraft: {
       title: 'The Shadow Within',
       premise: 'A girl discovers that her shadow has a life of its own.',
@@ -129,6 +164,24 @@ export const INITIAL_CONVERSATIONS: Conversation[] = [
     createdAt: now - 1000 * 60 * 60 * 24,
     updatedAt: now - 1000 * 60 * 60 * 22,
     interviewStep: 'mood_emotion',
+    intakeState: {
+      projectId: 'proj_my_stories',
+      conversationId: 'conv_lost_kingdom',
+      storyTitle: { value: 'The Lost Kingdom', provided: true, confirmed: true },
+      visualStyle: { value: 'Hand-painted animation', provided: true, confirmed: true },
+      storyContext: {
+        value:
+          'An archivist discovers a sunken brass astrolabe that projects star maps of a vanished coastal empire.',
+        provided: true,
+        confirmed: true,
+      },
+      missingFields: [],
+      currentQuestion: null,
+      status: 'completed',
+      awaitingConfirmation: false,
+      generationStarted: true,
+      updatedAt: now - 1000 * 60 * 60 * 22,
+    },
     storyDraft: {
       title: 'The Lost Kingdom',
       premise:
@@ -167,6 +220,24 @@ export const INITIAL_CONVERSATIONS: Conversation[] = [
     createdAt: now - 1000 * 60 * 60 * 48,
     updatedAt: now - 1000 * 60 * 60 * 46,
     interviewStep: 'camera_ending',
+    intakeState: {
+      projectId: 'proj_my_stories',
+      conversationId: 'conv_journey_home',
+      storyTitle: { value: 'A Journey Home', provided: true, confirmed: true },
+      visualStyle: { value: 'Cinematic realism', provided: true, confirmed: true },
+      storyContext: {
+        value:
+          'After ten years abroad, a violinist rides an overnight sleeper train back to a quiet mountain town with an unplayed score in her case.',
+        provided: true,
+        confirmed: true,
+      },
+      missingFields: [],
+      currentQuestion: null,
+      status: 'completed',
+      awaitingConfirmation: false,
+      generationStarted: true,
+      updatedAt: now - 1000 * 60 * 60 * 46,
+    },
     storyDraft: {
       title: 'A Journey Home',
       premise:

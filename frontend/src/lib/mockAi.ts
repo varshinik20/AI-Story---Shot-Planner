@@ -3,6 +3,7 @@ import type { Shot, ShotPlanner } from '@/types/planner'
 import type { StoryDraftState, StoryImprovementSuggestion } from '@/types/story'
 import { BOY_WHO_CRIED_WOLF_PLANNER } from '@/data/boyWhoCriedWolf'
 import { SHADOW_SUGGESTIONS, generateCustomShotPlanner } from '@/data/sampleStory'
+import { validateIntakeReadyForGeneration } from '@/features/story-intake/services/storyGenerationService'
 import { generateId } from './utils'
 
 export interface SimulatedReplyResult {
@@ -30,6 +31,9 @@ export function buildSimulatedAiReply(
   userText: string,
   attachment?: UploadedAttachment
 ): SimulatedReplyResult {
+  if (conversation.intakeState) {
+    validateIntakeReadyForGeneration(conversation.intakeState)
+  }
   const lower = userText.toLowerCase()
   const step = conversation.interviewStep
 

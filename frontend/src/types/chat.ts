@@ -1,5 +1,6 @@
 import type { ShotPlanner } from './planner'
 import type { StoryDraftState, StoryImprovementSuggestion } from './story'
+import type { StoryIntakeState } from '@/features/story-intake/types/storyIntake.types'
 
 export type MessageRole = 'user' | 'assistant'
 
@@ -40,6 +41,9 @@ export interface ChatMessage {
   plannerId?: string
   plannerSnapshot?: ShotPlanner
   isApprovalCard?: boolean
+  showStyleSuggestions?: boolean
+  intakeConfirmation?: StoryIntakeState
+  intakeDecision?: 'confirmed' | 'editing'
 }
 
 export interface Conversation {
@@ -52,6 +56,7 @@ export interface Conversation {
   storyDraft: StoryDraftState
   interviewStep: InterviewStep
   plannerId?: string
+  intakeState?: StoryIntakeState
 }
 
 export interface StoryProject {

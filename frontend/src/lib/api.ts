@@ -16,6 +16,13 @@ export interface AIChatRequest {
   messages: AIChatMessage[]
   interview_step: InterviewStep
   story_draft: Record<string, unknown>
+  intake_state?: {
+    story_title: string | null
+    visual_style: string | null
+    story_context: string | null
+    status: string
+    confirmed: boolean
+  }
 }
 
 export interface AIChatResponse {

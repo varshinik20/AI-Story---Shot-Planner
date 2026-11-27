@@ -9,6 +9,8 @@ import { useChatStore } from '@/store/chatStore'
 import { useProjectStore } from '@/store/projectStore'
 import { StoryForgeLogo } from '@/components/common/StoryForgeLogo'
 import { StorySuggestion } from './StorySuggestion'
+import { StyleSuggestions } from '@/features/story-intake/components/StyleSuggestions'
+import { StoryConfirmation } from '@/features/story-intake/components/StoryConfirmation'
 import { ProjectOverview } from '@/components/planner/ProjectOverview'
 import { CharacterSection } from '@/components/planner/CharacterSection'
 import { LocationSection } from '@/components/planner/LocationSection'
@@ -22,11 +24,18 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ conversationId, message }: MessageBubbleProps) {
   const {
+    conversations,
+    isGenerating,
     selectOption,
+    confirmStoryIntake,
+    requestEditStoryIntake,
     updateSuggestionStatus,
     regenerateAssistantMessage,
     triggerComposerFocus,
   } = useChatStore()
+  const activeConversation = conversations.find((c) => c.id === conversationId)
+  const isLatestAssistantMessage =
+    activeConversation?.messages[activeConversation.messages.length - 1]?.id === message.id
   const planner = useProjectStore((s) =>
     message.plannerId ? s.planners[message.plannerId] : undefined
   )
@@ -107,6 +116,27 @@ export function MessageBubble({ conversationId, message }: MessageBubbleProps) {
               />
             ))}
           </div>
+        )}
+
+        {/* Optional Visual Style Suggestion Chips */}
+        {message.showStyleSuggestions && (
+          <StyleSuggestions
+            disabled={!isLatestAssistantMessage || isGenerating}
+            selectedStyle={activeConversation?.intakeState?.visualStyle.value}
+            onSelectStyle={(style) => selectOption(conversationId, message.id, style, style)}
+            onCustomDirection={() => triggerComposerFocus()}
+          />
+        )}
+
+        {/* Adaptive Story Intake Summary & Confirmation */}
+        {message.intakeConfirmation && (
+          <StoryConfirmation
+            intake={message.intakeConfirmation}
+            decision={message.intakeDecision}
+            disabled={isGenerating}
+            onConfirm={() => confirmStoryIntake(conversationId, message.id)}
+            onEdit={(field) => requestEditStoryIntake(conversationId, message.id, field)}
+          />
         )}
 
         {/* Clickable Option Chips (Relationship & Creative Intent Interview) */}
