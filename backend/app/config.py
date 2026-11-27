@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     DB_POOL_TIMEOUT: int = 30
     DB_POOL_RECYCLE: int = 1800
 
+    OPENAI_API_KEY: str = Field(
+        ...,
+        description="OpenAI API key for GPT-4o story and shot-plan generation.",
+    )
+    OPENAI_MODEL: str = Field(
+        default="gpt-4o",
+        description="OpenAI model to use (gpt-4o, gpt-4-turbo, etc.).",
+    )
+
     CORS_ORIGINS: list[str] = Field(
         default_factory=lambda: ["http://localhost:5173"],
     )
