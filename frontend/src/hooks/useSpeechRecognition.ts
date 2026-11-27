@@ -29,6 +29,7 @@ export interface UseSpeechRecognitionReturn {
   recordingState: SpeechRecordingState
   finalTranscript: string
   interimTranscript: string
+  completeTranscript: string
   error: string | null
   duration: number
   language: string
@@ -48,6 +49,9 @@ export function mergeTranscriptSegments(base: string, addition: string): string 
   if (!cleanAddition) return base
   const cleanBase = base.trimEnd()
   if (!cleanBase) return cleanAddition
+  if (cleanBase.toLowerCase().endsWith(cleanAddition.toLowerCase())) {
+    return cleanBase
+  }
   return `${cleanBase} ${cleanAddition}`
 }
 
@@ -85,6 +89,7 @@ export function useSpeechRecognition(
   const intentionalStopRef = useRef(false)
   const committedFinalRef = useRef('')
   const currentInstanceFinalRef = useRef('')
+  const currentInstanceInterimRef = useRef('')
   const restartCountRef = useRef(0)
   const restartTimerRef = useRef<number | null>(null)
   const stopTimerRef = useRef<number | null>(null)
@@ -161,12 +166,15 @@ export function useSpeechRecognition(
 
   const finalizeSession = useCallback(() => {
     clearTimers()
+    // Merge all finalized segments (including any final results received during shutdown)
+    // and clear temporary interim text.
     const merged = mergeTranscriptSegments(
       committedFinalRef.current,
       currentInstanceFinalRef.current
     )
     committedFinalRef.current = merged
     currentInstanceFinalRef.current = ''
+    currentInstanceInterimRef.current = ''
     cleanupRecognitionInstance()
 
     if (isMountedRef.current) {
@@ -228,6 +236,7 @@ export function useSpeechRecognition(
       }
 
       currentInstanceFinalRef.current = instanceFinal
+      currentInstanceInterimRef.current = instanceInterim
       const combinedFinal = mergeTranscriptSegments(committedFinalRef.current, instanceFinal)
       setFinalTranscript(combinedFinal)
       setInterimTranscript(instanceInterim)
@@ -255,6 +264,7 @@ export function useSpeechRecognition(
       )
       committedFinalRef.current = merged
       currentInstanceFinalRef.current = ''
+      currentInstanceInterimRef.current = ''
       cleanupRecognitionInstance()
 
       setFinalTranscript(merged)
@@ -278,6 +288,15 @@ export function useSpeechRecognition(
       if (intentionalStopRef.current || recordingStateRef.current === 'stopping') {
         finalizeSession()
         return
+      }
+
+      // If browser paused/ended unexpectedly while an interim segment existed, preserve it cleanly
+      if (currentInstanceInterimRef.current) {
+        const preserved = mergeTranscriptSegments(merged, currentInstanceInterimRef.current)
+        committedFinalRef.current = preserved
+        currentInstanceInterimRef.current = ''
+        setFinalTranscript(preserved)
+        setInterimTranscript('')
       }
 
       if (recordingStateRef.current === 'error' || recordingStateRef.current === 'unsupported') {
@@ -338,6 +357,7 @@ export function useSpeechRecognition(
     setDuration(0)
     committedFinalRef.current = ''
     currentInstanceFinalRef.current = ''
+    currentInstanceInterimRef.current = ''
     restartCountRef.current = 0
     intentionalStopRef.current = false
     updateState('requesting_permission')
@@ -404,6 +424,7 @@ export function useSpeechRecognition(
   const resetTranscript = useCallback(() => {
     committedFinalRef.current = ''
     currentInstanceFinalRef.current = ''
+    currentInstanceInterimRef.current = ''
     if (isMountedRef.current) {
       setFinalTranscript('')
       setInterimTranscript('')
@@ -421,11 +442,14 @@ export function useSpeechRecognition(
     }
   }, [updateState])
 
+  const completeTranscript = mergeTranscriptSegments(finalTranscript, interimTranscript)
+
   return {
     isSupported,
     recordingState,
     finalTranscript,
     interimTranscript,
+    completeTranscript,
     error,
     duration,
     language,

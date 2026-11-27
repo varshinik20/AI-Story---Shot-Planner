@@ -80,6 +80,7 @@ export interface ExtractedContextValue {
 
 export interface IntakeAnalysisResult {
   intent: IntakeIntent
+  inputSource?: 'text' | 'voice'
   source: 'backend_llm' | 'local_dev_analyzer'
   storyTitle: ExtractedFieldValue
   visualStyle: ExtractedFieldValue<VisualDetails>
@@ -94,6 +95,7 @@ export interface IntakeAnalysisResult {
 export interface AnalyzeIntakeInput {
   message: string
   currentState: StoryIntakeState
+  inputSource?: 'text' | 'voice'
   hasAttachment?: boolean
   attachmentName?: string
   recentHistory?: Array<{ role: 'user' | 'assistant'; content: string }>

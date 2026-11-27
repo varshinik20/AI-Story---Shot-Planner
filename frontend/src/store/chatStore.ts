@@ -40,7 +40,8 @@ interface ChatState {
   sendMessage: (
     text: string,
     attachment?: UploadedAttachment,
-    targetConversationId?: string | null
+    targetConversationId?: string | null,
+    options?: { inputSource?: 'text' | 'voice' }
   ) => Promise<string>
 
   selectOption: (
@@ -117,7 +118,7 @@ export const useChatStore = create<ChatState>()(
 
       clearComposerPrefill: () => set({ composerPrefill: null }),
 
-      sendMessage: async (text, attachment, targetConversationId) => {
+      sendMessage: async (text, attachment, targetConversationId, options) => {
         const trimmed = text.trim()
         if (!trimmed && !attachment) {
           return get().activeConversationId || ''
@@ -132,6 +133,7 @@ export const useChatStore = create<ChatState>()(
           role: 'user',
           content: trimmed || (attachment ? `Uploaded story document: ${attachment.name}` : ''),
           createdAt: now,
+          inputSource: options?.inputSource ?? 'text',
           attachment,
         }
 
@@ -205,6 +207,7 @@ export const useChatStore = create<ChatState>()(
             projectId: freshConv.projectId,
             currentState: currentIntake,
             message: trimmed,
+            inputSource: options?.inputSource ?? 'text',
             hasAttachment: Boolean(attachment),
             attachmentName: attachment?.name,
             recentHistory,

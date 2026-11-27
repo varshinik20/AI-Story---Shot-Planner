@@ -34,6 +34,7 @@ export interface ChatMessage {
   role: MessageRole
   content: string
   createdAt: number
+  inputSource?: 'text' | 'voice'
   attachment?: UploadedAttachment
   options?: OptionChoice[]
   selectedOptionId?: string

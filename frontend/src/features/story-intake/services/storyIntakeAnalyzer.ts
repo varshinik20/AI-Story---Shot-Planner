@@ -156,9 +156,9 @@ function extractTitleFromText(
     }
   }
 
-  // "called X" / "titled X" / "named X"
+  // "called X" / "titled X" / "named X" (stopping before "in <style> style", "about ...", or punctuation)
   const calledMatch = trimmed.match(
-    /\b(?:called|titled|named|title\s+is|title\s*:)\s+["'“]?([^"'”\n,.;!?]+)["'”]?/i
+    /\b(?:called|titled|named|title\s+is|title\s*:)\s+["'“]?([^"'”\n,.;!?]+?)(?=["'”]|\s*(?:,|\bin\s+[a-z\s-]+\s+style\b|\babout\b|\bwith\s+[a-z\s-]+\s+(?:style|lighting|atmosphere)\b|[.;!?]|$))/i
   )
   if (calledMatch?.[1]) {
     const titleCandidate = cleanPhrase(calledMatch[1])
@@ -450,6 +450,7 @@ export class LocalDevStoryIntakeAnalyzer implements StoryIntakeAnalyzer {
 
       return {
         intent: 'story_upload',
+        inputSource: input.inputSource ?? 'text',
         source: 'local_dev_analyzer',
         storyTitle: title,
         visualStyle: style,
@@ -598,6 +599,7 @@ export class LocalDevStoryIntakeAnalyzer implements StoryIntakeAnalyzer {
 
     return {
       intent,
+      inputSource: input.inputSource ?? 'text',
       source: 'local_dev_analyzer',
       storyTitle: extractedTitle,
       visualStyle: extractedStyle,
@@ -628,6 +630,7 @@ export class HybridStoryIntakeAnalyzer implements StoryIntakeAnalyzer {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: input.message,
+          input_source: input.inputSource ?? 'text',
           current_state: {
             story_title: input.currentState.storyTitle.value,
             visual_style: input.currentState.visualStyle.value,
@@ -734,6 +737,7 @@ export class HybridStoryIntakeAnalyzer implements StoryIntakeAnalyzer {
 
       return {
         intent: analysisBlock.intent ?? 'create_story',
+        inputSource: input.inputSource ?? 'text',
         source: 'backend_llm',
         storyTitle: {
           value: titleVal,

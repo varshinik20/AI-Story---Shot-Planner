@@ -61,6 +61,7 @@ export class StoryIntakeService {
     const analysis = await this.analyzer.analyze({
       message: input.message,
       currentState: baseState,
+      inputSource: input.inputSource,
       hasAttachment: input.hasAttachment,
       attachmentName: input.attachmentName,
       recentHistory: input.recentHistory,

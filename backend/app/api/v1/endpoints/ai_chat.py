@@ -199,11 +199,13 @@ class IntakeStateSnapshot(BaseModel):
 
 class IntakeAnalyzeRequest(BaseModel):
     message: str = Field(..., min_length=1)
+    input_source: str = Field(default="text")
     current_state: IntakeStateSnapshot = Field(default_factory=IntakeStateSnapshot)
     recent_history: list[MessagePayload] = Field(default_factory=list)
 
 
 class IntakeAnalysisPayload(BaseModel):
+    input_source: str = "text"
     intent: str
     extracted_fields: dict[str, Any]
     missing_fields: list[str]
@@ -362,6 +364,7 @@ async def analyze_story_intake(body: IntakeAnalyzeRequest) -> IntakeAnalyzeRespo
 
     return IntakeAnalyzeResponse(
         analysis=IntakeAnalysisPayload(
+            input_source=body.input_source,
             intent=analysis_raw.get("intent", "create_story"),
             extracted_fields=extracted,
             missing_fields=missing,

@@ -10,7 +10,11 @@ import {
 import { VoiceInputButton } from './VoiceInputButton'
 
 interface ChatComposerProps {
-  onSend: (text: string, attachment?: UploadedAttachment) => void
+  onSend: (
+    text: string,
+    attachment?: UploadedAttachment,
+    options?: { inputSource?: 'text' | 'voice' }
+  ) => void
   disabled?: boolean
   conversationId?: string
   speechLanguage?: string
@@ -40,12 +44,14 @@ export function ChatComposer({
   const menuRef = useRef<HTMLDivElement>(null)
   const baseTextBeforeRecordingRef = useRef('')
   const prevRecordingStateRef = useRef<string>('idle')
+  const usedVoiceRef = useRef(false)
+  const ignoreNextCompletionCommitRef = useRef(false)
 
   const {
     isSupported: isSpeechSupported,
     recordingState,
     finalTranscript,
-    interimTranscript,
+    completeTranscript,
     error: speechError,
     duration: recordingDuration,
     startRecording,
@@ -90,13 +96,24 @@ export function ChatComposer({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [attachMenuOpen])
 
-  // Stop active voice session if the user switches conversations
+  // Stop active voice session if the user switches conversations without leaking partial transcripts
+  const prevConversationIdRef = useRef<string | undefined>(conversationId)
   useEffect(() => {
+    const switchedBetweenExisting =
+      prevConversationIdRef.current !== undefined &&
+      prevConversationIdRef.current !== conversationId
+    prevConversationIdRef.current = conversationId
+
     if (
-      recordingState === 'listening' ||
-      recordingState === 'requesting_permission'
+      switchedBetweenExisting &&
+      (recordingState === 'listening' || recordingState === 'requesting_permission')
     ) {
+      ignoreNextCompletionCommitRef.current = true
       stopRecording()
+      setText('')
+      baseTextBeforeRecordingRef.current = ''
+      usedVoiceRef.current = false
+      resetTranscript()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId])
@@ -107,8 +124,13 @@ export function ChatComposer({
     prevRecordingStateRef.current = recordingState
 
     if (recordingState === 'listening' || recordingState === 'stopping') {
-      const spoken = mergeTranscriptSegments(finalTranscript, interimTranscript)
-      const nextText = mergeTranscriptSegments(baseTextBeforeRecordingRef.current, spoken)
+      if (completeTranscript) {
+        usedVoiceRef.current = true
+      }
+      const nextText = mergeTranscriptSegments(
+        baseTextBeforeRecordingRef.current,
+        completeTranscript
+      )
       setText(nextText)
       return
     }
@@ -119,6 +141,14 @@ export function ChatComposer({
         prevState === 'stopping' ||
         prevState === 'requesting_permission')
     ) {
+      if (ignoreNextCompletionCommitRef.current) {
+        ignoreNextCompletionCommitRef.current = false
+        resetTranscript()
+        return
+      }
+      if (finalTranscript) {
+        usedVoiceRef.current = true
+      }
       const committed = mergeTranscriptSegments(
         baseTextBeforeRecordingRef.current,
         finalTranscript
@@ -128,19 +158,22 @@ export function ChatComposer({
       resetTranscript()
       textareaRef.current?.focus()
     }
-  }, [recordingState, finalTranscript, interimTranscript, resetTranscript])
+  }, [recordingState, finalTranscript, completeTranscript, resetTranscript])
 
   const canSend = (text.trim().length > 0 || attachment !== null) && !disabled
 
   const handleSubmit = () => {
     if (!canSend) return
+    const finalMessageText = text
+    const inputSource: 'text' | 'voice' = usedVoiceRef.current ? 'voice' : 'text'
     if (isListeningOrStopping) {
+      ignoreNextCompletionCommitRef.current = true
       stopRecording()
     }
-    const finalMessageText = text
-    onSend(finalMessageText, attachment ?? undefined)
+    onSend(finalMessageText, attachment ?? undefined, { inputSource })
     setText('')
     baseTextBeforeRecordingRef.current = ''
+    usedVoiceRef.current = false
     setAttachment(null)
     setFileError(null)
     resetTranscript()
@@ -157,6 +190,7 @@ export function ChatComposer({
   }
 
   const handleStartVoice = () => {
+    ignoreNextCompletionCommitRef.current = false
     baseTextBeforeRecordingRef.current = text
     clearSpeechError()
     void startRecording()
@@ -165,6 +199,9 @@ export function ChatComposer({
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const nextValue = e.target.value
     setText(nextValue)
+    if (!nextValue.trim()) {
+      usedVoiceRef.current = false
+    }
     if (!isListeningOrStopping) {
       baseTextBeforeRecordingRef.current = nextValue
     }

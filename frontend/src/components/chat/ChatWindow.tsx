@@ -32,9 +32,15 @@ export function ChatWindow({ conversationId }: ChatWindowProps) {
 
   const handleSend = async (
     text: string,
-    attachment?: Parameters<typeof sendMessage>[1]
+    attachment?: Parameters<typeof sendMessage>[1],
+    options?: { inputSource?: 'text' | 'voice' }
   ) => {
-    const resultingConvId = await sendMessage(text, attachment, conversationId ?? null)
+    const resultingConvId = await sendMessage(
+      text,
+      attachment,
+      conversationId ?? null,
+      options
+    )
     if (!conversationId && resultingConvId) {
       navigate(`/c/${resultingConvId}`)
     }

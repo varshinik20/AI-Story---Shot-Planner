@@ -134,7 +134,8 @@ describe('ChatComposer voice integration', () => {
     expect(onSend).toHaveBeenCalledTimes(1)
     expect(onSend).toHaveBeenCalledWith(
       'Create a cinematic story about trust. The story should have an emotional ending. Set at twilight.',
-      undefined
+      undefined,
+      { inputSource: 'voice' }
     )
     expect(textarea.value).toBe('')
   })
@@ -155,7 +156,9 @@ describe('ChatComposer voice integration', () => {
     fireEvent.change(textarea, { target: { value: 'A quiet lighthouse story.' } })
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false })
 
-    expect(onSend).toHaveBeenCalledWith('A quiet lighthouse story.', undefined)
+    expect(onSend).toHaveBeenCalledWith('A quiet lighthouse story.', undefined, {
+      inputSource: 'text',
+    })
   })
 
   it('stops active recording when navigating to another conversation', async () => {
