@@ -89,7 +89,11 @@ export function ChatWindow({ conversationId }: ChatWindowProps) {
       </div>
 
       {/* Bottom Fixed Composer */}
-      <ChatComposer onSend={handleSend} disabled={isGenerating} />
+      <ChatComposer
+        onSend={handleSend}
+        disabled={isGenerating}
+        conversationId={conversationId}
+      />
     </div>
   )
 }

@@ -62,6 +62,17 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(api_router, prefix=app_settings.API_V1_PREFIX)
 
+    @app.get("/", include_in_schema=False)
+    async def root() -> dict[str, str]:
+        return {
+            "application": app_settings.APP_NAME,
+            "status": "running",
+            "docs": "/docs",
+            "redoc": "/redoc",
+            "health": "/health",
+            "api_v1": app_settings.API_V1_PREFIX,
+        }
+
     return app
 
 

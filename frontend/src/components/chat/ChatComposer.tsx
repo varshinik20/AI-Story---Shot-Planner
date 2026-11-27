@@ -1,20 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import {
-  ArrowUp,
-  FileText,
-  FileType,
-  Mic,
-  MicOff,
-  Paperclip,
-  X,
-} from 'lucide-react'
+import { ArrowUp, FileText, FileType, Paperclip, X } from 'lucide-react'
 import { cn, generateId } from '@/lib/utils'
 import type { UploadedAttachment } from '@/types/chat'
 import { useChatStore } from '@/store/chatStore'
+import {
+  mergeTranscriptSegments,
+  useSpeechRecognition,
+} from '@/hooks/useSpeechRecognition'
+import { VoiceInputButton } from './VoiceInputButton'
 
 interface ChatComposerProps {
   onSend: (text: string, attachment?: UploadedAttachment) => void
   disabled?: boolean
+  conversationId?: string
+  speechLanguage?: string
 }
 
 const ACCEPTED_EXTENSIONS: Record<string, UploadedAttachment['type']> = {
@@ -23,18 +22,40 @@ const ACCEPTED_EXTENSIONS: Record<string, UploadedAttachment['type']> = {
   docx: 'docx',
 }
 
-export function ChatComposer({ onSend, disabled = false }: ChatComposerProps) {
+export function ChatComposer({
+  onSend,
+  disabled = false,
+  conversationId,
+  speechLanguage,
+}: ChatComposerProps) {
   const { focusComposerSignal, composerPrefill, clearComposerPrefill } = useChatStore()
 
   const [text, setText] = useState('')
   const [attachment, setAttachment] = useState<UploadedAttachment | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const [attachMenuOpen, setAttachMenuOpen] = useState(false)
-  const [isRecording, setIsRecording] = useState(false)
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const baseTextBeforeRecordingRef = useRef('')
+  const prevRecordingStateRef = useRef<string>('idle')
+
+  const {
+    isSupported: isSpeechSupported,
+    recordingState,
+    finalTranscript,
+    interimTranscript,
+    error: speechError,
+    duration: recordingDuration,
+    startRecording,
+    stopRecording,
+    resetTranscript,
+    clearError: clearSpeechError,
+  } = useSpeechRecognition({ language: speechLanguage })
+
+  const isListeningOrStopping =
+    recordingState === 'listening' || recordingState === 'stopping'
 
   // Auto-resize textarea
   useEffect(() => {
@@ -69,14 +90,60 @@ export function ChatComposer({ onSend, disabled = false }: ChatComposerProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [attachMenuOpen])
 
+  // Stop active voice session if the user switches conversations
+  useEffect(() => {
+    if (
+      recordingState === 'listening' ||
+      recordingState === 'requesting_permission'
+    ) {
+      stopRecording()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId])
+
+  // Synchronize live speech transcription with preserved composer text without auto-sending
+  useEffect(() => {
+    const prevState = prevRecordingStateRef.current
+    prevRecordingStateRef.current = recordingState
+
+    if (recordingState === 'listening' || recordingState === 'stopping') {
+      const spoken = mergeTranscriptSegments(finalTranscript, interimTranscript)
+      const nextText = mergeTranscriptSegments(baseTextBeforeRecordingRef.current, spoken)
+      setText(nextText)
+      return
+    }
+
+    if (
+      (recordingState === 'completed' || recordingState === 'error') &&
+      (prevState === 'listening' ||
+        prevState === 'stopping' ||
+        prevState === 'requesting_permission')
+    ) {
+      const committed = mergeTranscriptSegments(
+        baseTextBeforeRecordingRef.current,
+        finalTranscript
+      )
+      setText(committed)
+      baseTextBeforeRecordingRef.current = committed
+      resetTranscript()
+      textareaRef.current?.focus()
+    }
+  }, [recordingState, finalTranscript, interimTranscript, resetTranscript])
+
   const canSend = (text.trim().length > 0 || attachment !== null) && !disabled
 
   const handleSubmit = () => {
     if (!canSend) return
-    onSend(text, attachment ?? undefined)
+    if (isListeningOrStopping) {
+      stopRecording()
+    }
+    const finalMessageText = text
+    onSend(finalMessageText, attachment ?? undefined)
     setText('')
+    baseTextBeforeRecordingRef.current = ''
     setAttachment(null)
     setFileError(null)
+    resetTranscript()
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -86,6 +153,20 @@ export function ChatComposer({ onSend, disabled = false }: ChatComposerProps) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSubmit()
+    }
+  }
+
+  const handleStartVoice = () => {
+    baseTextBeforeRecordingRef.current = text
+    clearSpeechError()
+    void startRecording()
+  }
+
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const nextValue = e.target.value
+    setText(nextValue)
+    if (!isListeningOrStopping) {
+      baseTextBeforeRecordingRef.current = nextValue
     }
   }
 
@@ -134,41 +215,32 @@ export function ChatComposer({ onSend, disabled = false }: ChatComposerProps) {
     })
   }
 
-  const handleVoiceToggle = () => {
-    if (isRecording) {
-      setIsRecording(false)
-      return
-    }
-    setIsRecording(true)
-    setTimeout(() => {
-      setIsRecording(false)
-      setText((prev) =>
-        prev
-          ? `${prev} She notices the shadow pausing at the edge of the lamplight.`
-          : 'A young clockmaker discovers every timepiece in town stops at midnight except one.'
-      )
-      textareaRef.current?.focus()
-    }, 950)
-  }
-
   const formatBytes = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`
     if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
+  const activeError = fileError || speechError
+
   return (
     <div className="w-full px-3 pb-4 pt-2 sm:px-6">
       <div className="mx-auto w-full max-w-3xl">
-        {/* File validation error */}
-        {fileError && (
-          <div className="mb-2 flex items-center justify-between rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-            <span>{fileError}</span>
+        {/* Inline validation / speech recognition error */}
+        {activeError && (
+          <div
+            role="alert"
+            className="mb-2 flex items-center justify-between rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
+          >
+            <span>{activeError}</span>
             <button
               type="button"
-              onClick={() => setFileError(null)}
+              onClick={() => {
+                if (fileError) setFileError(null)
+                if (speechError) clearSpeechError()
+              }}
               className="rounded p-0.5 hover:bg-red-100"
-              aria-label="Dismiss file error"
+              aria-label="Dismiss error"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -176,7 +248,14 @@ export function ChatComposer({ onSend, disabled = false }: ChatComposerProps) {
         )}
 
         {/* Rounded ChatGPT-style Composer */}
-        <div className="relative rounded-3xl border border-[#E5E7EB] bg-[#F9F9F9] px-3 py-2.5 transition-colors focus-within:border-[#D1D5DB] focus-within:bg-white">
+        <div
+          className={cn(
+            'relative rounded-3xl border bg-[#F9F9F9] px-3 py-2.5 transition-colors focus-within:bg-white',
+            isListeningOrStopping
+              ? 'border-red-300 bg-white'
+              : 'border-[#E5E7EB] focus-within:border-[#D1D5DB]'
+          )}
+        >
           {/* Attachment Chip Preview */}
           {attachment && (
             <div className="mb-2 flex items-center">
@@ -261,28 +340,22 @@ export function ChatComposer({ onSend, disabled = false }: ChatComposerProps) {
               ref={textareaRef}
               rows={1}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={handleTextChange}
               onKeyDown={handleKeyDown}
               placeholder="Describe your story or upload a document..."
               aria-label="Message StoryForge"
               className="max-h-[180px] min-h-[24px] flex-1 resize-none bg-transparent py-1.5 text-[14.5px] leading-relaxed text-[#212121] placeholder:text-[#6B7280] focus:outline-none"
             />
 
-            {/* Voice Note Button */}
-            <button
-              type="button"
-              onClick={handleVoiceToggle}
-              title={isRecording ? 'Listening...' : 'Voice note input'}
-              aria-label="Voice note input"
-              className={cn(
-                'flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors',
-                isRecording
-                  ? 'bg-[#10A37F]/15 text-[#10A37F] animate-pulse'
-                  : 'text-[#6B7280] hover:bg-[#EAEAEA] hover:text-[#212121]'
-              )}
-            >
-              {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            </button>
+            {/* Voice Recording Control */}
+            <VoiceInputButton
+              recordingState={recordingState}
+              isSupported={isSpeechSupported}
+              duration={recordingDuration}
+              disabled={disabled}
+              onStart={handleStartVoice}
+              onStop={stopRecording}
+            />
 
             {/* Send Button */}
             <button
