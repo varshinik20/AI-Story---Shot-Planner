@@ -69,6 +69,44 @@ def _strip_meta_command(text: str) -> str:
     return cleaned or text.strip()
 
 
+_GENERIC_REQUEST_WORDS: frozenset[str] = frozenset(
+    """
+    a an the any some one new my me us our for to of with please pls kindly just now again also
+    can could would will shall should may might you u i im i'm id i'd we lets let's let want wanna
+    need like love help hey hi hello ok okay so then and or
+    generate create write make tell give build produce draft craft come up do get
+    story stories tale tales film movie short animation animated script plot idea something
+    cool nice good great fun funny interesting amazing awesome random small little quick simple
+    kid kids children child bedtime
+    """.split()
+)
+
+
+_FIELD_LABEL_WORDS: frozenset[str] = frozenset(
+    "title titled called named name is it's its be style styled visual look looks animation 2d 3d".split()
+)
+
+
+def _is_generic_story_request(text: str | None, *, known_values: tuple[str | None, ...] = ()) -> bool:
+    """True when the text carries no narrative content usable as a premise.
+
+    Words that only ask for a story, label a field ("the title is ..."), or repeat an already-known
+    title / visual style are ignored; if nothing remains, the text is not a premise.
+
+    e.g. "can you generate a story for me"                      -> True
+         "The title is The Moonlight Guardian" (title known)   -> True
+         "a brave fox protects the forest at night"            -> False
+    """
+    if not text or not text.strip():
+        return True
+    ignored = set(_GENERIC_REQUEST_WORDS) | set(_FIELD_LABEL_WORDS)
+    for value in known_values:
+        if value:
+            ignored.update(re.findall(r"[a-z0-9']+", value.lower()))
+    tokens = re.findall(r"[a-z0-9']+", text.lower())
+    return all(tok in ignored for tok in tokens)
+
+
 def _title_grounded_in_input(
     candidate: str | None,
     latest_message: str,
@@ -274,6 +312,10 @@ class StoryIntakeEngine:
             state.visual_style = cand_style
 
         cand_context = _normalize_whitespace(extracted.extracted_story_context)
+        known_values = (state.story_title, state.visual_style)
+        if _is_generic_story_request(cand_context, known_values=known_values):
+            # "generate a story for me" is a request, not a premise; never accept it as story_context.
+            cand_context = None
         if input_source == "document" and trimmed_input:
             # Preserve exact uploaded story content verbatim
             state.story_context = trimmed_input
@@ -287,7 +329,7 @@ class StoryIntakeEngine:
         elif not state.story_context and len(trimmed_input.split()) >= 5:
             # Guard against losing narrative input like "The girl was running towards the edge of the cliff..."
             cleaned_premise = _strip_meta_command(trimmed_input)
-            if cleaned_premise and "create a story" not in cleaned_premise.lower():
+            if cleaned_premise and not _is_generic_story_request(cleaned_premise, known_values=known_values):
                 state.story_context = cleaned_premise
 
         if extracted.extracted_dialogue_source:
