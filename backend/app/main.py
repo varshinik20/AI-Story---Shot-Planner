@@ -14,6 +14,7 @@ from app.core.rate_limit import LoginRateLimiter
 from app.db.mongodb import MongoAuthDatabase
 from app.db.session import dispose_engine, get_engine
 from app.services.auth_init_service import AuthInitService
+from app.services.openai_client import close_openai_client
 
 logger = logging.getLogger("cinemind.app")
 
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         yield
     finally:
         await app.state.mongo_auth_db.close()
+        await close_openai_client()
         await dispose_engine()
         logger.info("%s backend shut down cleanly.", settings.APP_NAME)
 

@@ -81,7 +81,33 @@ def _norm_compare(value: str) -> str:
         .replace("\u2014", "--")
     )
     return re.sub(r"\s+", " ", cleaned).strip().lower()
-    
+
+
+_QUOTED_LINE_RE = re.compile(r'[“"]([^“”"\n]{1,400})[”"]')
+
+
+def extract_story_dialogue(story_text: str) -> list[dict[str, str]]:
+    """Deterministically list every quoted spoken line in the story, with its surrounding sentence.
+
+    The surrounding sentence carries the speaker attribution (e.g. `Pip calls, "Fern?"`) so the
+    shot model can place each verbatim line on the right shot without having to rediscover it.
+    """
+    lines: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for match in _QUOTED_LINE_RE.finditer(story_text or ""):
+        line = match.group(1).strip().rstrip(",").strip()
+        key = _norm_compare(line)
+        if not line or key in seen:
+            continue
+        seen.add(key)
+        start = max(story_text.rfind("\n", 0, match.start()), story_text.rfind(". ", 0, match.start() - 1))
+        end_candidates = [i for i in (story_text.find("\n", match.end()), story_text.find(". ", match.end())) if i != -1]
+        end = min(end_candidates) + 1 if end_candidates else len(story_text)
+        context = re.sub(r"\s+", " ", story_text[start + 1 : end]).strip()
+        lines.append({"exact_line": line, "context": context[:300]})
+    return lines
+
+
 def expand_camera_setups(shots: list[ProducedShotItem]) -> list[ProducedShotItem]:
     """Deterministic guard: split any shot that packs several camera setups into one shot per setup.
 
@@ -433,6 +459,21 @@ class ProductionEngine:
             "audience_experience": intent.audience_experience if intent else None,
         }
 
+        story_dialogue = extract_story_dialogue(approved_story_text)
+        dialogue_block = (
+            "Spoken Lines in the Approved Story (verbatim, in story order, with the sentence they occur in):\n"
+            + "\n".join(
+                f"{i}. \"{d['exact_line']}\"  — context: {d['context']}" for i, d in enumerate(story_dialogue, start=1)
+            )
+            + "\nDIALOGUE PLACEMENT (MANDATORY): For EVERY line above whose moment happens inside THIS scene "
+            "(match by the context sentence against this scene's summary and events), attach it to the shot "
+            "where it is spoken: speaker = the named speaker, exact_line = the line copied EXACTLY, "
+            "delivery = how it is said. Do not skip lines that belong to this scene, and do not use lines "
+            "belonging to other scenes.\n\n"
+            if story_dialogue
+            else ""
+        )
+
         prompt = (
             f"Scene Prefix: {scene_prefix}\n"
             f"Scene ID: {scene.scene_id} | Title: {scene.title}\n"
@@ -444,6 +485,7 @@ class ProductionEngine:
             f"Prior Continuity State:\n{continuity_snapshot}\n"
             f"Creative Direction:\n{intent_dict}\n\n"
             f"Approved Story Text (ONLY source for verbatim dialogue if any exists):\n{approved_story_text}\n\n"
+            f"{dialogue_block}"
             f"Generate the ordered shots ONLY for Scene {scene.scene_id} using shot_id format '{scene_prefix}_SH01', '{scene_prefix}_SH02', ..."
         )
 

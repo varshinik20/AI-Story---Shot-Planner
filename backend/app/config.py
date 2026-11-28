@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
 from pydantic import Field, field_validator, model_validator
@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 10
     DB_POOL_TIMEOUT: int = 30
     DB_POOL_RECYCLE: int = 1800
+    DB_ECHO: bool = Field(
+        default=False,
+        description="Log every SQL statement. Independent of DEBUG; keep off except when debugging queries.",
+    )
 
     OPENAI_API_KEY: str = Field(
         default="",
@@ -43,6 +47,22 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = Field(
         default="gpt-4o",
         description="OpenAI model to use (gpt-4o, gpt-4-turbo, etc.).",
+    )
+    OPENAI_MODEL_IS_REASONING: bool | None = Field(
+        default=None,
+        description=(
+            "Force reasoning-model request shape (no temperature, uses reasoning_effort). "
+            "Leave unset to auto-detect from the model name (o1/o3/o4/gpt-5/gpt-6 families)."
+        ),
+    )
+    OPENAI_REASONING_EFFORT: Literal["low", "medium", "high", "xhigh"] = Field(
+        default="low",
+        description="reasoning_effort for reasoning models. Lower is faster and cheaper.",
+    )
+    OPENAI_MAX_CONNECTIONS: int = Field(
+        default=100,
+        ge=1,
+        description="Max pooled HTTP connections per process to the OpenAI API.",
     )
     GEMINI_API_KEY: str | None = Field(
         default=None,

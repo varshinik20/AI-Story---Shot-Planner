@@ -25,7 +25,7 @@ Develop the creator's confirmed story premise into a vivid, film-ready complete 
 CRITICAL RULES:
 1. STRICTLY retain every core premise detail, action, character, and plot event provided by the creator. Never replace or omit key events (for example, if the premise states a girl runs toward a cliff edge and falls down, that action MUST happen clearly in the narrative).
 2. If the creator provided uploaded story text and preserve_original_text=true, refine structure minimally without rewriting their prose or inventing new dialogue.
-3. Do NOT invent spoken dialogue lines unless dialogue already exists in the input or the instruction specifically asks for spoken lines. Visual action and sensory storytelling are preferred when no dialogue is supplied.
+3. Dialogue: when developing a premise (preserve_original_text=false), write natural spoken dialogue in every beat where characters share a moment — 1–3 short quoted lines with a named speaker in the same sentence (e.g. `Maya whispered, "I am not turning back."`), spread across the whole story. When preserve_original_text=true, NEVER add or alter dialogue; keep the creator's lines exactly.
 4. Provide 2 to 3 targeted, optional improvement suggestions (pacing, sensory atmosphere, emotional beat, or dramatic tension) where `original_passage` is an EXACT substring of `developed_story` so the creator can accept or reject each suggestion cleanly.
 
 Return strict JSON matching the schema."""

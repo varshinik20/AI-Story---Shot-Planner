@@ -16,13 +16,14 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 import httpx
-from openai import AsyncOpenAI, OpenAIError
+from openai import OpenAIError
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.dependencies import AppSettings, DbSession
 from app.engines.story_intake import IntakeState, StoryIntakeEngine
 from app.services.llm_service import LLMService
+from app.services.openai_client import get_openai_client, sampling_params
 from app.services.shot_rules import (
     CAMERA_SETUP_RULE_PROMPT,
     assign_frames_to_setups,
@@ -465,7 +466,7 @@ async def ai_chat(body: AIChatRequest) -> AIChatResponse:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="OPENAI_API_KEY is not configured in backend/.env.",
         )
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    client = get_openai_client(settings).with_options(max_retries=settings.LLM_MAX_RETRIES)
 
     # Build messages for OpenAI
     intake_confirmed = bool(body.intake_state and body.intake_state.get("confirmed"))
@@ -512,6 +513,7 @@ async def ai_chat(body: AIChatRequest) -> AIChatResponse:
             messages=openai_messages,  # type: ignore[arg-type]
             response_format={"type": "json_object"},
             max_completion_tokens=8192,
+            **sampling_params(settings, settings.OPENAI_MODEL, temperature=1.0),
         )
         raw = response.choices[0].message.content or "{}"
     except OpenAIError as exc:

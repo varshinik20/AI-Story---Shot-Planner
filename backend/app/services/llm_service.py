@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import Settings
 from app.core.exceptions import LLMUnavailableError, LLMUpstreamError
 from app.db.models.domain import ModelUsageLog
+from app.services.openai_client import get_openai_client, is_reasoning_model
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +90,15 @@ _MODELS_WITHOUT_TEMPERATURE: set[str] = set()
 class OpenAIProviderAdapter:
     """OpenAI Chat Completions adapter using AsyncOpenAI."""
 
-    def __init__(self, api_key: str, client: AsyncOpenAI | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        client: AsyncOpenAI | None = None,
+        settings: Settings | None = None,
+    ) -> None:
         self._api_key = api_key.strip()
         self._client = client
+        self._settings = settings
 
     def _get_client(self, timeout_seconds: float) -> AsyncOpenAI:
         if self._client is not None:
@@ -101,7 +108,15 @@ class OpenAIProviderAdapter:
                 "OPENAI_API_KEY is not configured. Add it to backend/.env to enable AI generation.",
                 code="LLM_API_KEY_MISSING",
             )
+        if self._settings is not None:
+            # Process-wide pooled client: reuses keep-alive connections across requests.
+            return get_openai_client(self._settings)
         return AsyncOpenAI(api_key=self._api_key, timeout=timeout_seconds, max_retries=0)
+
+    def _is_reasoning(self, model: str) -> bool:
+        if model in _MODELS_WITHOUT_TEMPERATURE:
+            return True
+        return self._settings is not None and is_reasoning_model(self._settings, model)
 
     async def complete(
         self,
@@ -117,16 +132,21 @@ class OpenAIProviderAdapter:
         request_id = str(uuid.uuid4())
         started = time.perf_counter()
 
-        effective_max = max(max_tokens, 6000) if model in _MODELS_WITHOUT_TEMPERATURE else max_tokens
+        reasoning = self._is_reasoning(model)
+        # Reasoning tokens count toward the completion budget, so keep a safe floor.
+        effective_max = max(max_tokens, 6000) if reasoning else max_tokens
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "max_completion_tokens": effective_max,
+            "timeout": timeout_seconds,
         }
-        if model not in _MODELS_WITHOUT_TEMPERATURE:
-            kwargs["temperature"] = temperature
+        if reasoning:
+            kwargs["reasoning_effort"] = (
+                self._settings.OPENAI_REASONING_EFFORT if self._settings is not None else "low"
+            )
         else:
-            kwargs["reasoning_effort"] = "low"
+            kwargs["temperature"] = temperature
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
@@ -137,9 +157,15 @@ class OpenAIProviderAdapter:
             retry_kwargs = dict(kwargs)
             changed = False
             if "temperature" in msg:
+                logger.warning(
+                    "Model '%s' rejected temperature; set OPENAI_MODEL_IS_REASONING=true to avoid this extra round trip.",
+                    model,
+                )
                 _MODELS_WITHOUT_TEMPERATURE.add(model)
                 retry_kwargs.pop("temperature", None)
-                retry_kwargs["reasoning_effort"] = "low"
+                retry_kwargs["reasoning_effort"] = (
+                    self._settings.OPENAI_REASONING_EFFORT if self._settings is not None else "low"
+                )
                 retry_kwargs["max_completion_tokens"] = max(max_tokens, 6000)
                 changed = True
             if "reasoning_effort" in msg:
@@ -204,7 +230,8 @@ class LLMService:
         self.session = session
         self.settings = settings
         self.adapter: LLMProviderAdapter = adapter or OpenAIProviderAdapter(
-            api_key=settings.OPENAI_API_KEY
+            api_key=settings.OPENAI_API_KEY,
+            settings=settings,
         )
 
     async def _record_usage(

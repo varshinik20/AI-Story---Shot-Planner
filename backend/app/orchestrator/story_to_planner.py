@@ -115,7 +115,9 @@ REQUIREMENTS:
 3. Complete Developed Story (`developed_story`):
    - Write a vivid, cinematic narrative with distinct beginning, middle, turning point, climax, and coherent resolution.
    - Keep character names, ages/appearances, motivations, and locations consistent throughout.
-   - Include natural spoken dialogue where it enriches dramatic beats, formatted clearly in quotes inside the story (e.g. `Maya whispered, "I am not turning back."`).
+   - DIALOGUE IS REQUIRED: this story becomes an animated film with voiced characters, so write natural spoken dialogue throughout — not only at the climax. Every story beat where two or more characters share the moment (or a character reacts aloud) MUST contain 1–3 short spoken lines. Aim for roughly 12–25 spoken lines across the whole story, spread across the beginning, middle, climax and resolution.
+   - Format every spoken line in double quotes with an explicit named speaker in the same sentence (e.g. `Maya whispered, "I am not turning back."`). Keep lines short (under ~15 words) and in character; one line per quote.
+   - The ONLY exceptions: a genuinely wordless/silent concept explicitly requested by the creator, or a single-character beat with nobody to speak to (a brief inner exclamation is still welcome).
    - If uploaded/existing source prose is marked `preserve_story_text=true`, keep its plot, character names, and dialogue lines intact while lightly structuring it if needed.
 4. Creative Direction:
    - Infer cohesive visual_style, colour_palette, overall_atmosphere, overall_mood, pacing, lighting, camera_preferences, character_treatment, audience_experience, ending_tone, and desired_ending_experience suited to the story.
