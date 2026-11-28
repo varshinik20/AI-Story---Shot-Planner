@@ -19,6 +19,7 @@ export function ChatWindow({ conversationId }: ChatWindowProps) {
     isGenerating,
     sendMessage,
     setActiveConversation,
+    activeConversationId,
   } = useChatStore()
 
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -30,20 +31,21 @@ export function ChatWindow({ conversationId }: ChatWindowProps) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [activeConv?.messages.length, isGenerating])
 
+  // When a NEW conversation is created from the home page, navigate to it immediately
+  // as soon as it appears in the store — don't wait for the AI response.
+  useEffect(() => {
+    if (!conversationId && activeConversationId) {
+      navigate(`/c/${activeConversationId}`, { replace: true })
+    }
+  }, [conversationId, activeConversationId, navigate])
+
   const handleSend = async (
     text: string,
     attachment?: Parameters<typeof sendMessage>[1],
     options?: { inputSource?: 'text' | 'voice' }
   ) => {
-    const resultingConvId = await sendMessage(
-      text,
-      attachment,
-      conversationId ?? null,
-      options
-    )
-    if (!conversationId && resultingConvId) {
-      navigate(`/c/${resultingConvId}`)
-    }
+    await sendMessage(text, attachment, conversationId ?? null, options)
+    // Navigation is handled by the useEffect above reacting to activeConversationId change
   }
 
   const handleOpenDemo = () => {

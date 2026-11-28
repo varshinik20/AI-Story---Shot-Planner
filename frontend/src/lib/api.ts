@@ -48,3 +48,26 @@ export async function sendAIChat(payload: AIChatRequest): Promise<AIChatResponse
   return res.json() as Promise<AIChatResponse>
 }
 
+export async function extractDocumentText(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  const content_base64 = btoa(binary)
+
+  const res = await fetch(`${BASE_URL}/api/v1/ai/extract-document`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: file.name, content_base64 }),
+  })
+
+  if (!res.ok) {
+    return ''
+  }
+  const data = (await res.json()) as { text?: string }
+  return data.text?.trim() ?? ''
+}
+

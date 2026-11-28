@@ -50,6 +50,9 @@ export interface Scene {
   locations: string[]
   timeOfDay: string
   shots: Shot[]
+  referenceImageUrl?: string
+  referenceImagePrompt?: string
+  referenceImageError?: string
 }
 
 export interface CharacterProfile {

@@ -757,7 +757,7 @@ export class HybridStoryIntakeAnalyzer implements StoryIntakeAnalyzer {
           theme: sc?.theme ?? null,
           mainConflict: sc?.main_conflict ?? null,
         },
-        missingFields: analysisBlock.missing_fields ?? missing,
+        missingFields: missing,
         readyForGeneration: missing.length === 0,
         assistantMessage: safeAssistantMessage,
         generalAnswer: sanitizeAssistantMessage(data.general_answer),

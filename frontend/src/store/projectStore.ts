@@ -17,26 +17,43 @@ interface ProjectState {
   resetPlanners: () => void
 }
 
+function clampShotDuration(shot: Shot): Shot {
+  const raw = Number(shot.durationSeconds) || 4
+  const hasDialogue = Boolean(shot.dialogue?.line?.trim())
+  const emotionText = `${shot.emotion || ''} ${shot.dialogue?.delivery || ''}`.toLowerCase()
+  const highEmotion =
+    /\b(deep|intense|heartfelt|tearful|emotional|desperate|triumphant|climactic|anguish|grief|sorrow|joy|relief|pleading|passionate|trembling|crying|determined|courage|moral|hope|love|fear|awe|proud|broken|devastated|revelation)\b/.test(
+      emotionText
+    )
+  const maxAllowed = hasDialogue && highEmotion ? 7 : 5
+  const clamped = Math.min(Math.max(Math.round(raw), 1), maxAllowed)
+  return clamped === shot.durationSeconds ? shot : { ...shot, durationSeconds: clamped }
+}
+
 function recalculateOverview(planner: ShotPlanner): ShotPlanner {
   let totalShots = 0
   let dialogueLines = 0
   let runningTimeSeconds = 0
 
-  for (const scene of planner.scenes) {
-    totalShots += scene.shots.length
-    for (const shot of scene.shots) {
-      runningTimeSeconds += Number(shot.durationSeconds) || 0
+  const normalizedScenes = planner.scenes.map((scene) => {
+    const normalizedShots = scene.shots.map((rawShot) => {
+      const shot = clampShotDuration(rawShot)
+      totalShots += 1
+      runningTimeSeconds += shot.durationSeconds
       if (shot.dialogue && shot.dialogue.line.trim().length > 0) {
         dialogueLines += 1
       }
-    }
-  }
+      return shot
+    })
+    return { ...scene, shots: normalizedShots }
+  })
 
   return {
     ...planner,
+    scenes: normalizedScenes,
     overview: {
       ...planner.overview,
-      totalScenes: planner.scenes.length,
+      totalScenes: normalizedScenes.length,
       totalShots,
       dialogueLines,
       runningTimeSeconds,

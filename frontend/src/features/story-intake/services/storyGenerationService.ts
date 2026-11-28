@@ -76,7 +76,8 @@ export const defaultStoryGenerationRunner: StoryGenerationRunner = async ({
   try {
     return await sendAIChat({
       messages: historyForAI,
-      interview_step: conversation.interviewStep,
+      interview_step:
+        conversation.interviewStep === 'idle' ? 'ready_for_plan' : conversation.interviewStep,
       story_draft: enrichedDraft,
       intake_state: {
         story_title: intakeState.storyTitle.value,

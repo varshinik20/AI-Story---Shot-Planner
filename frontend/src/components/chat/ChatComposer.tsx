@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, FileText, FileType, Paperclip, X } from 'lucide-react'
 import { cn, generateId } from '@/lib/utils'
+import { extractDocumentText } from '@/lib/api'
 import type { UploadedAttachment } from '@/types/chat'
 import { useChatStore } from '@/store/chatStore'
 import {
@@ -236,7 +237,14 @@ export function ChatComposer({
     if (mappedType === 'txt') {
       try {
         const raw = await file.text()
-        previewText = raw.slice(0, 220).trim()
+        previewText = raw.slice(0, 15000).trim()
+      } catch {
+        previewText = undefined
+      }
+    } else {
+      try {
+        const extracted = await extractDocumentText(file)
+        previewText = extracted || undefined
       } catch {
         previewText = undefined
       }

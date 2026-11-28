@@ -9,15 +9,17 @@ export function ChatPage() {
   const navigate = useNavigate()
   const { conversations, setActiveConversation } = useChatStore()
 
-  const exists = conversations.some((c) => c.id === conversationId)
+  const conversation = conversations.find((c) => c.id === conversationId)
 
   useEffect(() => {
-    if (conversationId && exists) {
-      setActiveConversation(conversationId)
-    }
-  }, [conversationId, exists, setActiveConversation])
+      if (conversationId && conversation) {
+        setActiveConversation(conversationId)
+      }
+}, [conversationId, conversation, setActiveConversation])
 
-  if (!conversationId || !exists) {
+  // Show "not found" only if the store has conversations loaded but this one isn't among them.
+  // If conversations is empty the store may still be hydrating — wait rather than 404.
+  if (!conversationId || (conversations.length > 0 && !conversation)) {
     return (
       <div className="flex h-full flex-col items-center justify-center px-4 text-center">
         <h2 className="text-lg font-semibold text-[#212121]">Conversation not found</h2>

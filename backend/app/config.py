@@ -43,6 +43,10 @@ class Settings(BaseSettings):
         default="gpt-4o",
         description="OpenAI model to use (gpt-4o, gpt-4-turbo, etc.).",
     )
+    GEMINI_API_KEY: str | None = Field(
+        default=None,
+        description="Google Gemini API key for scene reference image generation.",
+    )
 
     CORS_ORIGINS: list[str] = Field(
         default_factory=lambda: ["http://localhost:5173"],

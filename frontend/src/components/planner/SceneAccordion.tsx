@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, MapPin, Sun } from 'lucide-react'
+import { ChevronDown, ChevronRight, ImageIcon, MapPin, Sun } from 'lucide-react'
 import type { Scene } from '@/types/planner'
 import { ShotCard } from './ShotCard'
 
@@ -72,6 +72,21 @@ export function SceneAccordion({
               defaultExpanded={scene.sceneId === 'S01' && idx === 0}
             />
           ))}
+
+          {scene.referenceImageUrl && (
+            <div className="mt-3 overflow-hidden rounded-xl border border-[#E5E7EB] bg-white">
+              <div className="flex items-center gap-1.5 border-b border-[#E5E7EB] bg-[#F9F9F9] px-3 py-1.5 text-[11px] font-medium text-[#6B7280]">
+                <ImageIcon className="h-3.5 w-3.5 text-[#10A37F]" />
+                <span>Scene Reference Frame</span>
+              </div>
+              <img
+                src={scene.referenceImageUrl}
+                alt={`Reference frame for ${scene.sceneTitle}`}
+                className="aspect-video w-full object-cover"
+                loading="lazy"
+              />
+            </div>
+          )}
         </div>
       )}
     </div>
