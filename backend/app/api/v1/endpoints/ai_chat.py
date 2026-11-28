@@ -440,7 +440,7 @@ async def ai_chat(body: AIChatRequest) -> AIChatResponse:
             model=settings.OPENAI_MODEL,
             messages=openai_messages,  # type: ignore[arg-type]
             response_format={"type": "json_object"},
-            max_completion_tokens=16384,
+            max_completion_tokens=8192,
         )
         raw = response.choices[0].message.content or "{}"
     except OpenAIError as exc:
