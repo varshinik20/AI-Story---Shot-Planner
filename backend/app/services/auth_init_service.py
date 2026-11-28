@@ -35,6 +35,9 @@ class AuthInitService:
             )
             return
 
+        if await self._migrate_legacy_plaintext_credential(repo):
+            return
+
         configured_username = self._settings.AUTH_USERNAME.strip()
         configured_password = self._settings.AUTH_PASSWORD
         if not configured_username or not configured_password:
@@ -55,3 +58,42 @@ class AuthInitService:
                 record.username,
                 self._mongo_db.collection_name,
             )
+
+    async def _migrate_legacy_plaintext_credential(self, repo: AuthRepository) -> bool:
+        """Convert a manually inserted {username, password} document into the canonical hashed record.
+
+        The plaintext password is hashed with Argon2id and the original document is deleted, so no
+        plaintext secret remains in MongoDB. The operation is idempotent across concurrent workers:
+        the canonical upsert is keyed on a fixed _id and stray documents are removed.
+        """
+        legacy = await repo.find_non_canonical_credential()
+        if legacy is None:
+            return False
+
+        username = legacy.get("username")
+        plaintext = legacy.get("password")
+        if (
+            isinstance(username, str)
+            and username.strip()
+            and isinstance(plaintext, str)
+            and plaintext
+            and "password_hash" not in legacy
+        ):
+            record = await repo.upsert_authorized_account(
+                username=username.strip(),
+                password_hash=hash_password(plaintext),
+                is_active=bool(legacy.get("is_active", True)),
+            )
+            logger.warning(
+                "Migrated plaintext credential document for '%s' in collection '%s' to an "
+                "Argon2id-hashed record; the plaintext document was removed.",
+                record.username,
+                self._mongo_db.collection_name,
+            )
+            return True
+
+        raise AuthConfigurationError(
+            f"Collection '{self._mongo_db.collection_name}' contains a credential document with an "
+            "unsupported schema (expected 'username' and 'password', or a record created by "
+            "scripts/manage_auth_credential.py). Fix or remove it before starting the backend."
+        )

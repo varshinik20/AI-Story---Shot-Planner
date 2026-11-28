@@ -1,203 +1,226 @@
 import jsPDF from 'jspdf'
-import autoTable from 'jspdf-autotable'
-import type { ShotPlanner } from '@/types/planner'
+import autoTable, { type CellHookData, type UserOptions } from 'jspdf-autotable'
+import type { Shot, ShotPlanner } from '@/types/planner'
 
 /**
- * Modular client-side PDF generator structured after the hackathon reference layout.
- * Page 1: Film title, logline, statistics, creator's intent, characters, and locations.
- * Subsequent pages: Scene-wise shot tables containing all 10 required fields.
- * Designed as an isolated module so a backend PDF service can replace it cleanly later.
+ * Client-side Shot Planner PDF generator matching the approved reference layout
+ * ("PRODUCTION SHOT PLANNER (1 SHOT = 1 FRAME)").
+ *
+ * Page 1: film title, logline, statistics band, creator's intent, shot rule, characters, locations.
+ * Following pages: one section per scene with a 10-column shot table. Every row is ONE camera
+ * setup (one framing + one angle); a change of angle or framing is always a new shot row.
  */
-export function exportShotPlannerToPdf(planner: ShotPlanner): void {
-  const doc = new jsPDF({
-    orientation: 'landscape',
-    unit: 'pt',
-    format: 'a4',
-  })
 
-  const pageWidth = doc.internal.pageSize.getWidth()
-  const margin = 40
-  let y = 44
+type RGB = [number, number, number]
 
-  // Header bar
+const ACCENT: RGB = [192, 80, 42]
+const TEXT_DARK: RGB = [40, 40, 46]
+const TEXT_BODY: RGB = [60, 60, 66]
+const TEXT_MUTED: RGB = [110, 110, 116]
+const HEADER_DARK: RGB = [44, 44, 52]
+const ROW_ALT: RGB = [245, 241, 234]
+const STATS_BG: RGB = [243, 239, 232]
+const BORDER: RGB = [222, 216, 206]
+
+const MARGIN = 40
+const FOOTER_GAP = 22
+
+export const SHOT_RULE_TEXT =
+  'Every shot is one frame: one subject, one action, one camera setup, one location and one moment. ' +
+  'Whenever the subject, action, angle, location, lighting, insert detail or reaction changes, a new shot ' +
+  'begins. Each shot runs 5 seconds or less, except deeply emotional dialogue (up to 7 seconds).'
+
+function lastY(doc: jsPDF): number {
+  return (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY
+}
+
+function sectionHeading(doc: jsPDF, label: string, y: number): number {
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(9)
-  doc.setTextColor(16, 163, 127)
-  doc.text('STORYFORGE • PRODUCTION SHOT PLANNER', margin, y)
+  doc.setFontSize(9.5)
+  doc.setTextColor(...ACCENT)
+  doc.text(label.toUpperCase(), MARGIN, y)
+  return y + 12
+}
 
-  y += 22
-  doc.setFontSize(22)
-  doc.setTextColor(33, 33, 33)
-  doc.text(planner.overview.filmTitle, margin, y)
-
-  y += 18
+function paragraph(doc: jsPDF, text: string, y: number, width: number): number {
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(10.5)
-  doc.setTextColor(75, 85, 99)
-  const loglineLines = doc.splitTextToSize(planner.overview.logline, pageWidth - margin * 2)
-  doc.text(loglineLines, margin, y)
-  y += loglineLines.length * 14 + 10
+  doc.setFontSize(9.5)
+  doc.setTextColor(...TEXT_BODY)
+  const lines = doc.splitTextToSize(text || '—', width)
+  doc.text(lines, MARGIN, y)
+  return y + lines.length * 12.5 + 10
+}
 
-  // Statistics summary row
-  autoTable(doc, {
-    startY: y,
-    margin: { left: margin, right: margin },
+function baseTableOptions(): Partial<UserOptions> {
+  return {
+    margin: { left: MARGIN, right: MARGIN, bottom: MARGIN + FOOTER_GAP },
     theme: 'grid',
     headStyles: {
-      fillColor: [249, 249, 249],
-      textColor: [33, 33, 33],
+      fillColor: HEADER_DARK,
+      textColor: [255, 255, 255],
       fontStyle: 'bold',
-      fontSize: 8.5,
-      lineColor: [229, 231, 235],
+      fontSize: 8,
+      cellPadding: 5,
+      lineColor: HEADER_DARK,
     },
     bodyStyles: {
-      textColor: [33, 33, 33],
-      fontSize: 9.5,
-      lineColor: [229, 231, 235],
+      textColor: TEXT_BODY,
+      fontSize: 7.8,
+      cellPadding: 5,
+      valign: 'top',
+      lineColor: BORDER,
+      lineWidth: 0.5,
     },
+    alternateRowStyles: { fillColor: ROW_ALT },
+    columnStyles: { 0: { fontStyle: 'bold', textColor: TEXT_DARK } },
+  }
+}
+
+function formatDialogue(shot: Shot): string {
+  const d = shot.dialogue
+  if (!d || !d.line?.trim()) return 'None'
+  const delivery = d.delivery?.trim() ? ` (${d.delivery.trim()})` : ''
+  return `${d.speaker}: “${d.line.trim()}”${delivery}`
+}
+
+function drawFooters(doc: jsPDF, filmTitle: string): void {
+  const pageCount = doc.getNumberOfPages()
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  const label = `${filmTitle.toUpperCase()} • PRODUCTION SHOT PLANNER (1 SHOT = 1 FRAME)`
+  for (let i = 1; i <= pageCount; i += 1) {
+    doc.setPage(i)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(7.5)
+    doc.setTextColor(...TEXT_MUTED)
+    doc.text(label, MARGIN, pageHeight - MARGIN + 12)
+    doc.text(`Page ${i}`, pageWidth - MARGIN, pageHeight - MARGIN + 12, { align: 'right' })
+  }
+}
+
+export function buildShotPlannerPdf(planner: ShotPlanner): jsPDF {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' })
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const contentWidth = pageWidth - MARGIN * 2
+  const { overview } = planner
+  const filmTitle = overview.filmTitle || 'Untitled Story'
+
+  // Totals are always derived from the actual shot rows so the header never disagrees with the tables.
+  const allShots = planner.scenes.flatMap((s) => s.shots)
+  const totalShots = allShots.length
+  const dialogueLines = allShots.filter((s) => s.dialogue && s.dialogue.line?.trim()).length
+  const runningTime = allShots.reduce((sum, s) => sum + (Number(s.durationSeconds) || 0), 0)
+
+  // ------------------------------------------------------------------ Page 1: overview
+  let y = 52
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8.5)
+  doc.setTextColor(...ACCENT)
+  doc.text('STORYFORGE • PRODUCTION SHOT PLANNER', MARGIN, y)
+
+  y += 28
+  doc.setFontSize(26)
+  doc.setTextColor(...TEXT_DARK)
+  doc.text(filmTitle, MARGIN, y)
+
+  y += 18
+  y = paragraph(doc, overview.logline, y, contentWidth) - 2
+
+  autoTable(doc, {
+    startY: y,
+    margin: { left: MARGIN, right: MARGIN },
+    theme: 'plain',
+    tableLineColor: BORDER,
+    tableLineWidth: 0.6,
+    styles: { fillColor: STATS_BG, textColor: TEXT_DARK, cellPadding: { top: 7, bottom: 5, left: 10, right: 10 } },
+    headStyles: { fontStyle: 'bold', fontSize: 7.5, textColor: TEXT_BODY },
+    bodyStyles: { fontStyle: 'bold', fontSize: 15, cellPadding: { top: 2, bottom: 8, left: 10, right: 10 } },
     head: [['Scenes', 'Total Shots', 'Dialogue Lines', 'Running Time', 'Video Format', 'Frame Rate']],
     body: [
       [
-        String(planner.overview.totalScenes),
-        String(planner.overview.totalShots),
-        String(planner.overview.dialogueLines),
-        `${planner.overview.runningTimeSeconds}s`,
-        planner.overview.videoFormat,
-        planner.overview.frameRate,
+        String(planner.scenes.length),
+        String(totalShots),
+        String(dialogueLines),
+        `${runningTime}s`,
+        overview.videoFormat || '16:9 HD',
+        overview.frameRate || '24fps',
       ],
     ],
   })
 
-  y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 16
+  y = lastY(doc) + 20
+  y = sectionHeading(doc, "Creator's Intent", y)
+  y = paragraph(doc, overview.creatorsIntent, y, contentWidth)
 
-  // Creator's Intent
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(11)
-  doc.setTextColor(33, 33, 33)
-  doc.text("Creator's Intent", margin, y)
-  y += 14
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(9.5)
-  doc.setTextColor(75, 85, 99)
-  const intentLines = doc.splitTextToSize(planner.overview.creatorsIntent, pageWidth - margin * 2)
-  doc.text(intentLines, margin, y)
-  y += intentLines.length * 13 + 14
+  y = sectionHeading(doc, 'Shot Rule Applied', y)
+  y = paragraph(doc, SHOT_RULE_TEXT, y, contentWidth)
 
-  // Characters table
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(11)
-  doc.setTextColor(33, 33, 33)
-  doc.text('Characters', margin, y)
-
+  y = sectionHeading(doc, 'Characters', y)
   autoTable(doc, {
-    startY: y + 6,
-    margin: { left: margin, right: margin },
-    theme: 'grid',
-    headStyles: {
-      fillColor: [243, 244, 246],
-      textColor: [33, 33, 33],
-      fontStyle: 'bold',
-      fontSize: 8.5,
-      lineColor: [229, 231, 235],
-    },
-    bodyStyles: {
-      textColor: [33, 33, 33],
-      fontSize: 8.5,
-      lineColor: [229, 231, 235],
-      cellPadding: 5,
+    ...baseTableOptions(),
+    startY: y - 4,
+    columnStyles: {
+      0: { cellWidth: 100, fontStyle: 'bold', textColor: TEXT_DARK },
+      1: { cellWidth: 160 },
+      2: { cellWidth: (contentWidth - 260) / 2 },
+      3: { cellWidth: (contentWidth - 260) / 2 },
     },
     head: [['Name', 'Role', 'Physical Appearance', 'Personality & Voice']],
-    body: planner.characters.map((c) => [
-      c.name,
-      c.role,
-      c.physicalAppearance,
-      c.personalityAndVoice,
-    ]),
+    body: planner.characters.map((c) => [c.name, c.role, c.physicalAppearance, c.personalityAndVoice]),
   })
 
-  y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 16
-
-  // Locations table
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(11)
-  doc.setTextColor(33, 33, 33)
-  doc.text('Locations', margin, y)
-
+  y = lastY(doc) + 20
+  y = sectionHeading(doc, 'Locations', y)
   autoTable(doc, {
-    startY: y + 6,
-    margin: { left: margin, right: margin },
-    theme: 'grid',
-    headStyles: {
-      fillColor: [243, 244, 246],
-      textColor: [33, 33, 33],
-      fontStyle: 'bold',
-      fontSize: 8.5,
-      lineColor: [229, 231, 235],
-    },
-    bodyStyles: {
-      textColor: [33, 33, 33],
-      fontSize: 8.5,
-      lineColor: [229, 231, 235],
-      cellPadding: 5,
+    ...baseTableOptions(),
+    startY: y - 4,
+    columnStyles: {
+      0: { cellWidth: 160, fontStyle: 'bold', textColor: TEXT_DARK },
+      1: { cellWidth: contentWidth - 160 },
     },
     head: [['Location Name', 'Visual Description']],
     body: planner.locations.map((loc) => [loc.name, loc.visualDescription]),
   })
 
-  // Following pages: Scene-wise shot tables with all 10 required fields
+  // ------------------------------------------------------------------ Scene pages
   planner.scenes.forEach((scene) => {
     doc.addPage('a4', 'landscape')
-    let sy = 42
+    let sy = 52
 
     doc.setFont('helvetica', 'bold')
-    doc.setFontSize(9)
-    doc.setTextColor(16, 163, 127)
-    doc.text(`${planner.overview.filmTitle.toUpperCase()} • SCENE BREAKDOWN`, margin, sy)
+    doc.setFontSize(8.5)
+    doc.setTextColor(...ACCENT)
+    doc.text(`${filmTitle.toUpperCase()} • SCENE BREAKDOWN`, MARGIN, sy)
 
+    sy += 22
+    doc.setFontSize(16)
+    doc.setTextColor(...TEXT_DARK)
+    doc.text(`${scene.sceneId}: ${scene.sceneTitle}`, MARGIN, sy)
+
+    const sceneTime = scene.shots.reduce((sum, s) => sum + (Number(s.durationSeconds) || 0), 0)
     sy += 18
-    doc.setFontSize(14)
-    doc.setTextColor(33, 33, 33)
-    doc.text(`${scene.sceneId}: ${scene.sceneTitle}`, margin, sy)
-
-    sy += 15
     doc.setFont('helvetica', 'normal')
     doc.setFontSize(9.5)
-    doc.setTextColor(107, 114, 128)
-    doc.text(
-      `Locations: ${scene.locations.join(', ')}   |   Time of Day: ${scene.timeOfDay}   |   Shots: ${scene.shots.length}`,
-      margin,
-      sy
-    )
+    doc.setTextColor(...TEXT_BODY)
+    const meta =
+      `Locations: ${scene.locations.join(', ') || '—'} | Time of Day: ${scene.timeOfDay || '—'} | ` +
+      `Shots: ${scene.shots.length} | Scene time: ${sceneTime}s`
+    doc.text(doc.splitTextToSize(meta, contentWidth), MARGIN, sy)
 
     autoTable(doc, {
-      startY: sy + 12,
-      margin: { left: margin, right: margin },
-      theme: 'grid',
-      headStyles: {
-        fillColor: [33, 33, 33],
-        textColor: [255, 255, 255],
-        fontStyle: 'bold',
-        fontSize: 7.5,
-        cellPadding: 4,
-      },
-      bodyStyles: {
-        textColor: [33, 33, 33],
-        fontSize: 7.5,
-        cellPadding: 4,
-        valign: 'top',
-        lineColor: [229, 231, 235],
-      },
+      ...baseTableOptions(),
+      startY: sy + 14,
       columnStyles: {
-        0: { cellWidth: 52 }, // Shot ID
-        1: { cellWidth: 34 }, // Duration
-        2: { cellWidth: 66 }, // Framing
-        3: { cellWidth: 64 }, // Movement
-        4: { cellWidth: 62 }, // Characters
-        5: { cellWidth: 64 }, // Location
-        6: { cellWidth: 145 }, // What we see
-        7: { cellWidth: 125 }, // Dialogue
-        8: { cellWidth: 66 }, // Emotion
-        9: { cellWidth: 84 }, // Sound
+        0: { cellWidth: 54, fontStyle: 'bold', textColor: TEXT_DARK }, // Shot ID
+        1: { cellWidth: 28 }, // Duration
+        2: { cellWidth: 64 }, // Framing (includes angle)
+        3: { cellWidth: 72 }, // Camera movement
+        4: { cellWidth: 58 }, // Characters
+        5: { cellWidth: 62 }, // Location
+        6: { cellWidth: 142 }, // What we see
+        7: { cellWidth: 118 }, // Dialogue
+        8: { cellWidth: 76 }, // Emotion
+        9: { cellWidth: contentWidth - 674 }, // Sound
       },
       head: [
         [
@@ -207,7 +230,7 @@ export function exportShotPlannerToPdf(planner: ShotPlanner): void {
           'Camera Movement',
           'Characters',
           'Location',
-          'What We See',
+          'What We See (1 Frame)',
           'Dialogue (Speaker / Line / Delivery)',
           'Emotion',
           'Sound',
@@ -217,23 +240,31 @@ export function exportShotPlannerToPdf(planner: ShotPlanner): void {
         shot.shotId,
         `${shot.durationSeconds}s`,
         shot.framing,
-        shot.cameraMovement,
-        shot.characters.join(', ') || '—',
+        shot.cameraMovement || 'Static',
+        shot.characters.join(', ') || 'None',
         shot.location,
         shot.whatWeSee,
-        shot.dialogue
-          ? `${shot.dialogue.speaker}: "${shot.dialogue.line}" (${shot.dialogue.delivery})`
-          : 'None',
+        formatDialogue(shot),
         shot.emotion,
         shot.sound,
       ]),
+      didParseCell: (data: CellHookData) => {
+        if (data.section === 'body' && data.column.index === 7 && data.cell.raw !== 'None') {
+          data.cell.styles.textColor = TEXT_DARK
+        }
+      },
     })
   })
 
-  const safeSlug = planner.overview.filmTitle
+  drawFooters(doc, filmTitle)
+  return doc
+}
+
+export function exportShotPlannerToPdf(planner: ShotPlanner): void {
+  const doc = buildShotPlannerPdf(planner)
+  const safeSlug = (planner.overview.filmTitle || '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '')
-
   doc.save(`${safeSlug || 'storyforge'}-shot-planner.pdf`)
 }

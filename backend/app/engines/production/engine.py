@@ -26,11 +26,21 @@ from app.db.models.domain import (
 from app.engines.cinematic_reasoning.engine import CinematicReasoningEngine, ShotTreatmentCandidate
 from app.engines.continuity import ContinuityEngine
 from app.engines.production.schemas import (
+    CameraSpec,
     LLMSceneBreakdownPayload,
     LLMSceneShotsPayload,
+    ProducedShotItem,
     SceneOut,
 )
 from app.services.llm_service import LLMService
+from app.services.shot_rules import (
+    CAMERA_SETUP_RULE_PROMPT,
+    framing_from_movement_fragment,
+    split_angle_setups,
+    split_duration,
+    split_framing_setups,
+    split_movement_on_cuts,
+)
 
 SCENE_SYSTEM_PROMPT = """You are CINEMIND's Production Breakdown Architect.
 Group the extracted narrative events into cohesive, filmable scenes (`S01`, `S02`, ...) driven by the NetworkX graph diagnostics (location boundaries, emotional arc peaks, and pacing transition points).
@@ -55,6 +65,10 @@ Follow the Part 11 Shot Data Contract strictly for each shot in this scene:
 - emotion: target emotion
 - sound: ambient/SFX/score design
 
+""" + CAMERA_SETUP_RULE_PROMPT + """
+  - For this contract, put the angle in `camera.angle` (exactly ONE angle) and the framing in `framing` (exactly ONE framing).
+  - Generate as many shots as the scene needs (typically 8-25); each shot is generally 2..5 seconds.
+
 Return strict JSON matching the schema."""
 
 
@@ -67,6 +81,52 @@ def _norm_compare(value: str) -> str:
         .replace("\u2014", "--")
     )
     return re.sub(r"\s+", " ", cleaned).strip().lower()
+    
+def expand_camera_setups(shots: list[ProducedShotItem]) -> list[ProducedShotItem]:
+    """Deterministic guard: split any shot that packs several camera setups into one shot per setup.
+
+    A setup is one framing + one angle. Compound framings ("WS to CU"), compound angles
+    ("Low Angle / High Angle") and edit points in the movement ("static, then cut to ...")
+    each produce a new shot. Dialogue stays on the first resulting shot only.
+    """
+    expanded: list[ProducedShotItem] = []
+    for item in sorted(shots, key=lambda x: x.shot_order):
+        movement_parts = split_movement_on_cuts(item.camera.movement)
+        first_movement = movement_parts[0] if movement_parts else (item.camera.movement or "Static")
+        framings = split_framing_setups(item.framing, first_movement) or [item.framing]
+        angles = split_angle_setups(item.camera.angle) or [item.camera.angle]
+
+        count = max(len(framings), len(angles))
+        setups: list[tuple[str, str, str]] = [
+            (
+                framings[min(i, len(framings) - 1)],
+                angles[min(i, len(angles) - 1)],
+                first_movement,
+            )
+            for i in range(count)
+        ]
+        for fragment in movement_parts[1:]:
+            fr, mv = framing_from_movement_fragment(fragment, setups[-1][0])
+            setups.append((fr, setups[-1][1], mv))
+
+        if len(setups) == 1:
+            fr, ang, mv = setups[0]
+            expanded.append(item.model_copy(update={"framing": fr, "camera": CameraSpec(angle=ang, movement=mv)}))
+            continue
+
+        durations = split_duration(item.duration_seconds, len(setups))
+        for idx, ((fr, ang, mv), dur) in enumerate(zip(setups, durations)):
+            expanded.append(
+                item.model_copy(
+                    update={
+                        "framing": fr,
+                        "camera": CameraSpec(angle=ang, movement=mv or "Static"),
+                        "duration_seconds": item.duration_seconds if (idx == 0 and item.dialogue) else min(dur, 60),
+                        "dialogue": item.dialogue if idx == 0 else [],
+                    }
+                )
+            )
+    return expanded
 
 
 def _normalize_dialogue_against_story(
@@ -398,7 +458,7 @@ class ProductionEngine:
             project_id=project_id,
             scene_id=scene.scene_id,
             temperature=0.35,
-            max_tokens=2200,
+            max_tokens=6000,
         )
 
         # Replace prior shots ONLY for this specific scene (leave other scenes untouched!)
@@ -416,7 +476,7 @@ class ProductionEngine:
         dominant_ev = max(scene_events, key=lambda e: e.intensity) if scene_events else None
 
         created_shots: list[Shot] = []
-        for idx, item in enumerate(sorted(payload.shots, key=lambda x: x.shot_order), start=1):
+        for idx, item in enumerate(expand_camera_setups(payload.shots), start=1):
             raw_dialogue = [d.model_dump() for d in item.dialogue]
             safe_dialogue = _normalize_dialogue_against_story(raw_dialogue, approved_story_text)
 

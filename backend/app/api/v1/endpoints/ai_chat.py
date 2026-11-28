@@ -23,6 +23,14 @@ from app.config import get_settings
 from app.dependencies import AppSettings, DbSession
 from app.engines.story_intake import IntakeState, StoryIntakeEngine
 from app.services.llm_service import LLMService
+from app.services.shot_rules import (
+    CAMERA_SETUP_RULE_PROMPT,
+    assign_frames_to_setups,
+    framing_from_movement_fragment,
+    split_duration,
+    split_framing_setups,
+    split_movement_on_cuts,
+)
 
 logger = logging.getLogger("cinemind.ai_chat")
 router = APIRouter(prefix="/ai", tags=["AI"])
@@ -187,6 +195,64 @@ def _clamp_shot_duration(raw_dur: int, has_dialogue: bool, emotion_text: str) ->
     if has_dialogue and high_emotion:
         return min(max(raw_dur, 1), 7)
     return min(max(raw_dur, 1), 5)
+
+
+def _split_camera_setups(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ensure every shot is exactly one camera setup (one framing + one angle).
+
+    A shot whose framing names several setups ("WS to CU", "MS / Low-Angle CU") or whose
+    camera movement contains an edit point ("static, then cut to a low angle") is split
+    into one shot per setup. Runs before `_split_multi_frame_shots`, which renumbers IDs.
+    """
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            continue
+        new_shots: list[dict[str, Any]] = []
+        for sh in scene.get("shots") or []:
+            if not isinstance(sh, dict):
+                continue
+            framing = str(sh.get("framing") or "")
+            movement = str(sh.get("cameraMovement") or "")
+
+            # (framing, movement) per setup, in screen order
+            setups: list[tuple[str, str]] = []
+            movement_parts = split_movement_on_cuts(movement)
+            first_movement = movement_parts[0] if movement_parts else (movement or "Static")
+            for fr in split_framing_setups(framing, first_movement):
+                setups.append((fr, first_movement))
+            last_framing = setups[-1][0] if setups else framing
+            for fragment in movement_parts[1:]:
+                fr, mv = framing_from_movement_fragment(fragment, last_framing)
+                setups.append((fr, mv))
+                last_framing = fr
+
+            if len(setups) <= 1:
+                if setups:
+                    sh["framing"], sh["cameraMovement"] = setups[0]
+                new_shots.append(sh)
+                continue
+
+            frames = _split_what_we_see_into_frames(str(sh.get("whatWeSee") or ""))
+            descriptions = assign_frames_to_setups(frames, len(setups), str(sh.get("whatWeSee") or ""))
+            dur_str = re.sub(r"[^0-9.]", "", str(sh.get("durationSeconds") or "4"))
+            parent_dur = int(float(dur_str)) if dur_str else 4
+            durations = split_duration(parent_dur, len(setups))
+            dlg = sh.get("dialogue")
+            for idx, ((fr, mv), desc, dur) in enumerate(zip(setups, descriptions, durations)):
+                child = dict(sh)
+                child["framing"] = fr
+                child["cameraMovement"] = mv or "Static"
+                child["whatWeSee"] = desc
+                child["durationSeconds"] = parent_dur if (idx == 0 and dlg) else dur
+                # A spoken line belongs to exactly one shot so dialogue counts stay accurate.
+                child["dialogue"] = dlg if idx == 0 else None
+                new_shots.append(child)
+            logger.info(
+                "Split shot %s into %d camera setups (framing=%r, movement=%r)",
+                sh.get("shotId"), len(setups), framing, movement,
+            )
+        scene["shots"] = new_shots
+    return scenes
 
 
 def _split_multi_frame_shots(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -371,7 +437,7 @@ Rules:
   - **Match body language & speed to emotion**: Explicitly describe *how* and at *what speed/pace* the character moves, their posture, facial expression, and eye line (e.g., if serious, he walks with slow, heavy, deliberate footsteps, jaw set, shoulders tense, gaze locked forward; if happy, he walks with a light, brisk, bouncy stride, arms swinging freely, bright eyes, and an open smile).
   - **Detail the background & atmosphere**: Describe foreground/background elements, lighting color, shadows, weather, and movement in the environment of that single frame so the background visually reinforces the mood (e.g., cool desaturated mist and still silhouettes for tension vs. warm golden sunlight, swaying leaves, and vibrant depth for joy).
   - In `emotion`, state both the character's felt/visible emotion and the background's emotional atmosphere.
-"""
+""" + "- " + CAMERA_SETUP_RULE_PROMPT + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +496,9 @@ async def ai_chat(body: AIChatRequest) -> AIChatResponse:
             "Scene 1 = character introduction, Scene 2 = main plot, Scene 3 = climax and moral of the story. "
             "CRITICAL AI VIDEO RULE: Do NOT limit scenes to 4 shots. Generate as many shots as needed "
             "(minimum 10-18 single-frame shots per scene) with STRICTLY 1 frame and 1 character focus/action per shot, "
-            "and durationSeconds <= 5 (<= 7 only for high-emotion dialogue)."
+            "and durationSeconds <= 5 (<= 7 only for high-emotion dialogue). "
+            "ONE CAMERA SETUP PER SHOT: every change of camera angle or framing MUST be a new shot; "
+            "write non-eye-level angles inside `framing` (e.g. 'Low-Angle Wide Shot (WS)')."
         )
 
     openai_messages = [
@@ -503,6 +571,7 @@ async def ai_chat(body: AIChatRequest) -> AIChatResponse:
                     )
         # Split any multi-frame shots into 1-frame-per-shot and enforce duration caps
         raw_shot_count = sum(len(s.get("shots", [])) for s in scenes if isinstance(s, dict))
+        scenes = _split_camera_setups(scenes)
         scenes = _split_multi_frame_shots(scenes)
         split_shot_count = sum(len(s.get("shots", [])) for s in scenes if isinstance(s, dict))
         logger.info("Shot planner post-processed: %d -> %d shots across %d scenes", raw_shot_count, split_shot_count, len(scenes))

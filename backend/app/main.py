@@ -28,7 +28,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.APP_ENV,
     )
     get_engine()
-    await AuthInitService(app.state.mongo_auth_db, settings).initialize()
+    if settings.MONGODB_STARTUP_VALIDATION_ENABLED:
+        await AuthInitService(app.state.mongo_auth_db, settings).initialize()
+    elif settings.APP_ENV.strip().lower() in {"production", "prod"}:
+        raise RuntimeError(
+            "MONGODB_STARTUP_VALIDATION_ENABLED=false is not permitted when APP_ENV is production."
+        )
+    else:
+        logger.warning(
+            "MongoDB startup validation is DISABLED (MONGODB_STARTUP_VALIDATION_ENABLED=false). "
+            "Auth endpoints will return 503 until MongoDB is reachable."
+        )
     try:
         yield
     finally:
@@ -54,12 +64,7 @@ def create_application(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = app_settings
-    app.state.mongo_auth_db = MongoAuthDatabase(
-        url=app_settings.MONGODB_URL,
-        database_name=app_settings.MONGODB_DATABASE,
-        collection_name=app_settings.MONGODB_COLLECTION,
-        connect_timeout_ms=app_settings.MONGODB_CONNECT_TIMEOUT_MS,
-    )
+    app.state.mongo_auth_db = MongoAuthDatabase.from_settings(app_settings)
     app.state.login_rate_limiter = LoginRateLimiter(
         max_attempts=app_settings.AUTH_RATE_LIMIT_ATTEMPTS,
         window_seconds=app_settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,

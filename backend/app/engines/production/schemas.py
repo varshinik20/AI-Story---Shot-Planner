@@ -48,7 +48,7 @@ class ProducedShotItem(BaseModel):
 
 
 class LLMSceneShotsPayload(BaseModel):
-    shots: list[ProducedShotItem] = Field(..., min_length=1, max_length=10)
+    shots: list[ProducedShotItem] = Field(..., min_length=1, max_length=40)
 
 
 class GenerateScenesRequest(BaseModel):

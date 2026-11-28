@@ -20,12 +20,7 @@ from app.repositories.auth_repository import AuthRepository  # noqa: E402
 
 async def _run_command(args: argparse.Namespace) -> int:
     settings = get_settings()
-    mongo = MongoAuthDatabase(
-        url=settings.MONGODB_URL,
-        database_name=settings.MONGODB_DATABASE,
-        collection_name=settings.MONGODB_COLLECTION,
-        connect_timeout_ms=settings.MONGODB_CONNECT_TIMEOUT_MS,
-    )
+    mongo = MongoAuthDatabase.from_settings(settings)
     await mongo.connect()
     repo = AuthRepository(mongo)
     await repo.ensure_indexes()

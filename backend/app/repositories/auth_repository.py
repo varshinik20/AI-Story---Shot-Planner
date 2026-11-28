@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from pymongo import ASCENDING
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
-from app.core.exceptions import AuthDatabaseUnavailableError
+from app.core.exceptions import AuthConfigurationError, AuthDatabaseUnavailableError
 from app.db.mongodb import MongoAuthDatabase
 
 logger = logging.getLogger("cinemind.auth.repository")
@@ -59,6 +59,15 @@ class AuthRepository:
             logger.error("MongoDB read failed for authorized account: %s", type(exc).__name__)
             raise AuthDatabaseUnavailableError() from exc
 
+    async def find_non_canonical_credential(self) -> dict[str, Any] | None:
+        """Return any credential document not written by this service (e.g. inserted manually)."""
+        try:
+            collection = self._mongo_db.get_credentials_collection()
+            return await collection.find_one({"_id": {"$ne": AUTHORIZED_ACCOUNT_ID}})
+        except PyMongoError as exc:
+            logger.error("MongoDB read failed for legacy credential: %s", type(exc).__name__)
+            raise AuthDatabaseUnavailableError() from exc
+
     async def create_initial_authorized_account(
         self,
         *,
@@ -78,7 +87,10 @@ class AuthRepository:
                 # Never allow a second credential document in the singleton collection.
                 any_doc = await collection.find_one({})
                 if any_doc is not None:
-                    return AuthorizedCredentialRecord.model_validate(any_doc), False
+                    raise AuthConfigurationError(
+                        f"Collection '{self._mongo_db.collection_name}' contains an unrecognized "
+                        "credential document. Run scripts/manage_auth_credential.py to reset it."
+                    )
 
             now_iso = datetime.now(timezone.utc).isoformat()
             payload: dict[str, Any] = {

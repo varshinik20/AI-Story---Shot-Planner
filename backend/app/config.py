@@ -1,7 +1,8 @@
 from functools import lru_cache
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -76,17 +77,51 @@ class Settings(BaseSettings):
         description="MongoDB connection URL used exclusively for authentication.",
     )
     MONGODB_DATABASE: str = Field(
-        default="story_planner_auth",
-        description="MongoDB database name storing authorized credentials.",
+        default="",
+        description=(
+            "MongoDB database name storing authorized credentials. When empty, the database "
+            "in the MONGODB_URL path is used (e.g. mongodb+srv://.../ai_story), falling back "
+            "to 'story_planner_auth'."
+        ),
     )
     MONGODB_COLLECTION: str = Field(
         default="authorized_credentials",
         description="MongoDB collection storing the single authorized account.",
     )
     MONGODB_CONNECT_TIMEOUT_MS: int = Field(
-        default=5000,
+        default=10000,
         ge=500,
-        description="MongoDB connection timeout in milliseconds.",
+        description=(
+            "MongoDB connect / server-selection timeout in milliseconds. Atlas SRV lookups "
+            "plus TLS handshakes need more headroom than a local server."
+        ),
+    )
+    MONGODB_SOCKET_TIMEOUT_MS: int = Field(
+        default=20000,
+        ge=1000,
+        description="Per-operation socket timeout in milliseconds.",
+    )
+    MONGODB_MAX_POOL_SIZE: int = Field(
+        default=100,
+        ge=1,
+        description="Maximum concurrent connections per backend process to MongoDB.",
+    )
+    MONGODB_MIN_POOL_SIZE: int = Field(
+        default=0,
+        ge=0,
+        description="Warm connections kept open per backend process.",
+    )
+    MONGODB_MAX_IDLE_TIME_MS: int = Field(
+        default=300000,
+        ge=1000,
+        description="Close pooled connections idle longer than this (milliseconds).",
+    )
+    MONGODB_STARTUP_VALIDATION_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Verify MongoDB reachability and bootstrap the authorized account on startup. "
+            "May only be disabled outside production (local development without MongoDB)."
+        ),
     )
 
     AUTH_USERNAME: str = Field(
@@ -169,6 +204,19 @@ class Settings(BaseSettings):
                 "MONGODB_URL must use the mongodb:// or mongodb+srv:// scheme."
             )
         return cleaned
+
+    @model_validator(mode="after")
+    def resolve_mongodb_database(self) -> "Settings":
+        """Derive the auth database from the URI path when MONGODB_DATABASE is not set."""
+        if self.MONGODB_MIN_POOL_SIZE > self.MONGODB_MAX_POOL_SIZE:
+            raise ValueError("MONGODB_MIN_POOL_SIZE cannot exceed MONGODB_MAX_POOL_SIZE.")
+        if not self.MONGODB_DATABASE.strip():
+            # urlsplit performs no DNS resolution, so this is safe for mongodb+srv URIs.
+            path_db = unquote(urlsplit(self.MONGODB_URL).path.lstrip("/")).strip()
+            self.MONGODB_DATABASE = path_db or "story_planner_auth"
+        else:
+            self.MONGODB_DATABASE = self.MONGODB_DATABASE.strip()
+        return self
 
     @field_validator("JWT_ALGORITHM")
     @classmethod
