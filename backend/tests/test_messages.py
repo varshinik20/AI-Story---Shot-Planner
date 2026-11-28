@@ -104,27 +104,18 @@ async def test_cascade_delete_project_and_conversation_cleans_messages(
 
 
 @pytest.mark.asyncio
-async def test_invalid_message_role_and_empty_content_rejected() -> None:
-    app = create_application(
-        Settings(
-            DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/cinemind_test_db",
-            APP_ENV="test",
-            LOG_LEVEL="WARNING",
-        )
-    )
+async def test_invalid_message_role_and_empty_content_rejected(
+    client: AsyncClient,
+) -> None:
     conv_id = uuid.uuid4()
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://testserver",
-    ) as async_client:
-        bad_role = await async_client.post(
-            f"/api/v1/conversations/{conv_id}/messages",
-            json={"role": "narrator", "content": "Invalid role test."},
-        )
-        empty_content = await async_client.post(
-            f"/api/v1/conversations/{conv_id}/messages",
-            json={"role": "user", "content": "   "},
-        )
+    bad_role = await client.post(
+        f"/api/v1/conversations/{conv_id}/messages",
+        json={"role": "narrator", "content": "Invalid role test."},
+    )
+    empty_content = await client.post(
+        f"/api/v1/conversations/{conv_id}/messages",
+        json={"role": "user", "content": "   "},
+    )
 
     assert bad_role.status_code == 422
     assert bad_role.json()["error"]["code"] == "VALIDATION_ERROR"

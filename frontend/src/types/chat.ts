@@ -10,6 +10,7 @@ export interface UploadedAttachment {
   size: number
   type: 'pdf' | 'txt' | 'docx'
   previewText?: string
+  rawFile?: File
 }
 
 export interface OptionChoice {
@@ -58,6 +59,10 @@ export interface Conversation {
   interviewStep: InterviewStep
   plannerId?: string
   intakeState?: StoryIntakeState
+  backendProjectId?: string
+  backendConversationId?: string
+  backendStoryId?: string
+  workflowStage?: string
 }
 
 export interface StoryProject {

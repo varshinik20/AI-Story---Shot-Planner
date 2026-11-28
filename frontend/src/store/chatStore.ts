@@ -17,7 +17,47 @@ import {
   validateIntakeReadyForGeneration,
 } from '@/features/story-intake/services/storyGenerationService'
 import { storyIntakePersistence } from '@/features/story-intake/services/storyIntakePersistence'
+import {
+  sendChatTurn,
+  uploadStoryFile,
+  type BackendIntakeState,
+} from '@/lib/api'
 import { useProjectStore } from './projectStore'
+
+function toLocalIntakeState(
+  convId: string,
+  projectId: string,
+  backend: BackendIntakeState,
+  readyForDev: boolean,
+  needsConfirmation: boolean
+): StoryIntakeState {
+  const base = createInitialIntakeState(convId, projectId)
+  return {
+    ...base,
+    storyTitle: {
+      value: backend.story_title,
+      provided: Boolean(backend.story_title),
+      confirmed: backend.title_confirmed,
+    },
+    visualStyle: {
+      value: backend.visual_style,
+      provided: Boolean(backend.visual_style),
+      confirmed: Boolean(backend.visual_style),
+    },
+    storyContext: {
+      value: backend.story_context,
+      provided: Boolean(backend.story_context),
+      confirmed: Boolean(backend.story_context),
+    },
+    status: readyForDev
+      ? 'ready_for_generation'
+      : needsConfirmation
+      ? 'awaiting_confirmation'
+      : 'collecting',
+    generationStarted: readyForDev,
+    updatedAt: Date.now(),
+  }
+}
 
 interface ChatState {
   conversations: Conversation[]
@@ -191,141 +231,140 @@ export const useChatStore = create<ChatState>()(
 
         const existingIntake = getEffectiveIntakeState(freshConv)
 
-        // PRIORITY 0: If a story document (PDF/DOCX/TXT) is uploaded, extract info from it
-        // and directly generate the 3-scene shot planner without repeated intake questions.
-        if (attachment && !isIntakeCompleteAndConfirmed(existingIntake)) {
-          const docText = attachment.previewText?.trim() || ''
-          const combinedSource = [trimmed, docText].filter(Boolean).join('\n\n')
+        // LIVE MODE: Route typed text, voice transcripts, and document uploads through the unified FastAPI backend
+        if (import.meta.env.MODE !== 'test') {
+          try {
+            if (attachment?.rawFile) {
+              const up = await uploadStoryFile(attachment.rawFile, {
+                projectId: freshConv.backendProjectId,
+                conversationId: freshConv.backendConversationId,
+              })
+              const mappedIntake = toLocalIntakeState(
+                freshConv.id,
+                freshConv.projectId,
+                up.intake_state,
+                up.ready_for_story_development,
+                up.needs_confirmation
+              )
+              storyIntakePersistence.save(mappedIntake)
 
-          // Extract actual story title from the PDF/document text first (not the filename)
-          const extractTitleFromDoc = (text: string): string | null => {
-            if (!text) return null
-            const explicit = text.match(/^(?:story\s+)?title\s*[:\-]\s*(.+)$/im)
-            if (explicit?.[1]?.trim()) {
-              return explicit[1].trim().replace(/^["']|["']$/g, '')
-            }
-            const lines = text
-              .split(/\r?\n/)
-              .map((l) => l.trim())
-              .filter((l) => l.length > 0 && !/^(page\s*\d+|storyforge.*|production shot planner)$/i.test(l))
-            const first = lines[0]
-            if (
-              first &&
-              first.length >= 2 &&
-              first.length <= 80 &&
-              first.split(/\s+/).length <= 10 &&
-              !/[.!?]$/.test(first)
-            ) {
-              return first.replace(/^["'#*\s]+|["'#*\s]+$/g, '').trim() || null
-            }
-            return null
-          }
-
-          const extractedDocTitle = extractTitleFromDoc(docText)
-          const fallbackFilenameTitle = attachment.name
-            .replace(/\.(pdf|txt|docx)$/i, '')
-            .replace(/[_-]+/g, ' ')
-            .trim()
-          const titleFromDocument = Boolean(extractedDocTitle)
-          // Never pass the PDF filename as the story title to the AI — let the AI extract
-          // the real title from the story content when no explicit heading was found.
-          const intakeTitleValue = extractedDocTitle || 'Extract title from story'
-          const displayPendingTitle = extractedDocTitle || 'Analyzing story...'
-
-          const styleMatch = combinedSource.match(
-            /\b(3d\s+pixar[- ]style\s+animation|3d\s+animation|pixar[- ]style|hand[- ]painted\s+animation|watercolor\s+illustration|dark\s+fantasy|cinematic\s+realism|documentary\s+style|anime)\b/i
-          )
-          const inferredStyle = styleMatch ? styleMatch[1] : 'Cinematic realism'
-          const inferredContext =
-            combinedSource || `Adapt the uploaded story "${fallbackFilenameTitle || 'Untitled Story'}" into a 3-scene shot plan.`
-
-          const confirmedIntake: StoryIntakeState = {
-            ...(existingIntake ?? createInitialIntakeState(freshConv.id, freshConv.projectId)),
-            storyTitle: { value: intakeTitleValue, provided: true, confirmed: true },
-            visualStyle: { value: inferredStyle, provided: true, confirmed: true },
-            storyContext: { value: inferredContext, provided: true, confirmed: true },
-            missingFields: [],
-            currentQuestion: null,
-            status: 'ready_for_generation',
-            awaitingConfirmation: false,
-            generationStarted: true,
-            updatedAt: Date.now(),
-          }
-          storyIntakePersistence.save(confirmedIntake)
-
-          const convForGeneration: Conversation = {
-            ...freshConv,
-            title: displayPendingTitle,
-            intakeState: confirmedIntake,
-            storyDraft: {
-              ...freshConv.storyDraft,
-              title: extractedDocTitle || '',
-              visualStyle: inferredStyle,
-              premise: inferredContext,
-              segments: [inferredContext],
-              ...(titleFromDocument ? {} : { titleNeedsExtractionFromDoc: true }),
-            } as Conversation['storyDraft'],
-          }
-
-          const aiData = await generateConfirmedStory({
-            conversation: convForGeneration,
-            intakeState: confirmedIntake,
-          })
-
-          const aiTitle =
-            aiData.planner?.overview?.filmTitle?.trim() || aiData.suggested_title?.trim() || ''
-          const resolvedStoryTitle =
-            aiTitle && !/^extract title from story$/i.test(aiTitle)
-              ? aiTitle
-              : extractedDocTitle || fallbackFilenameTitle || 'Untitled Story'
-
-          if (aiData.planner) {
-            aiData.planner.overview.filmTitle = resolvedStoryTitle
-            useProjectStore.getState().registerPlanner(aiData.planner)
-          }
-
-          const finalIntake: StoryIntakeState = {
-            ...confirmedIntake,
-            storyTitle: { value: resolvedStoryTitle, provided: true, confirmed: true },
-          }
-          storyIntakePersistence.save(finalIntake)
-
-          const assistantMessage: ChatMessage = {
-            id: generateId('msg'),
-            role: 'assistant',
-            createdAt: Date.now(),
-            content: aiData.content,
-            options:
-              aiData.options?.map((o) => ({
-                ...o,
-                id: o.id || generateId('opt'),
-                action: (o.action as 'send' | 'focus_input') ?? 'send',
-              })) ?? undefined,
-            plannerId: aiData.planner?.id,
-            isApprovalCard: !!aiData.planner,
-          }
-
-          set((state) => ({
-            isGenerating: false,
-            conversations: state.conversations.map((c) => {
-              if (c.id !== convId) return c
-              return {
-                ...c,
-                title: resolvedStoryTitle || c.title,
-                updatedAt: Date.now(),
-                intakeState: finalIntake,
-                interviewStep: aiData.next_step,
-                plannerId: aiData.planner?.id ?? c.plannerId,
-                storyDraft: {
-                  ...convForGeneration.storyDraft,
-                  title: resolvedStoryTitle,
-                },
-                messages: [...c.messages, assistantMessage],
+              const assistantMsg: ChatMessage = {
+                id: generateId('msg'),
+                role: 'assistant',
+                createdAt: Date.now(),
+                content: up.assistant_message,
+                showStyleSuggestions: up.style_options.length > 0,
+                intakeConfirmation: up.needs_confirmation ? mappedIntake : undefined,
               }
-            }),
-          }))
 
-          return convId!
+              set((state) => ({
+                isGenerating: false,
+                conversations: state.conversations.map((c) =>
+                  c.id !== convId
+                    ? c
+                    : {
+                        ...c,
+                        title: up.intake_state.story_title || c.title,
+                        backendProjectId: up.project_id,
+                        backendConversationId: up.conversation_id,
+                        backendStoryId: up.story_id,
+                        workflowStage: up.workflow_stage,
+                        intakeState: mappedIntake,
+                        updatedAt: Date.now(),
+                        storyDraft: {
+                          ...c.storyDraft,
+                          title: up.intake_state.story_title || '',
+                          visualStyle: up.intake_state.visual_style || undefined,
+                          premise: up.extracted_text,
+                        },
+                        messages: [...c.messages, assistantMsg],
+                      }
+                ),
+              }))
+              return convId!
+            }
+
+            if (
+              !freshConv.workflowStage ||
+              freshConv.workflowStage === 'intake' ||
+              freshConv.workflowStage === 'intake_confirmation'
+            ) {
+              const turnRes = await sendChatTurn({
+                message: trimmed,
+                input_source: options?.inputSource ?? 'text',
+                project_id: freshConv.backendProjectId,
+                conversation_id: freshConv.backendConversationId,
+              })
+              const mappedIntake = toLocalIntakeState(
+                freshConv.id,
+                freshConv.projectId,
+                turnRes.intake_state,
+                turnRes.ready_for_story_development,
+                turnRes.needs_confirmation
+              )
+              storyIntakePersistence.save(mappedIntake)
+
+              const titleOpts = turnRes.suggested_titles.map((label) => ({
+                id: generateId('opt'),
+                label,
+                action: 'send' as const,
+              }))
+              const assistantMsg: ChatMessage = {
+                id: generateId('msg'),
+                role: 'assistant',
+                createdAt: Date.now(),
+                content: turnRes.assistant_message,
+                showStyleSuggestions: turnRes.style_options.length > 0,
+                intakeConfirmation: turnRes.needs_confirmation ? mappedIntake : undefined,
+                options: titleOpts.length > 0 ? titleOpts : undefined,
+              }
+
+              set((state) => ({
+                isGenerating: false,
+                conversations: state.conversations.map((c) =>
+                  c.id !== convId
+                    ? c
+                    : {
+                        ...c,
+                        title: turnRes.intake_state.story_title || c.title,
+                        backendProjectId: turnRes.project_id,
+                        backendConversationId: turnRes.conversation_id,
+                        backendStoryId: turnRes.story_id ?? c.backendStoryId,
+                        workflowStage: turnRes.workflow_stage,
+                        intakeState: mappedIntake,
+                        updatedAt: Date.now(),
+                        storyDraft: {
+                          ...c.storyDraft,
+                          title: turnRes.intake_state.story_title || '',
+                          visualStyle: turnRes.intake_state.visual_style || undefined,
+                          premise: turnRes.intake_state.story_context || c.storyDraft.premise,
+                        },
+                        messages: [...c.messages, assistantMsg],
+                      }
+                ),
+              }))
+              return convId!
+            }
+          } catch (err) {
+            const errMsg: ChatMessage = {
+              id: generateId('msg'),
+              role: 'assistant',
+              createdAt: Date.now(),
+              content:
+                err instanceof Error
+                  ? `Unable to process via backend AI service: ${err.message}`
+                  : 'Unable to reach CINEMIND backend service.',
+            }
+            set((state) => ({
+              isGenerating: false,
+              conversations: state.conversations.map((c) =>
+                c.id === convId
+                  ? { ...c, updatedAt: Date.now(), messages: [...c.messages, errMsg] }
+                  : c
+              ),
+            }))
+            return convId!
+          }
         }
 
         // PRIORITY 1: Every conversation without a confirmed intake state MUST pass through
@@ -585,6 +624,42 @@ export const useChatStore = create<ChatState>()(
             c.id === conversationId ? convWithConfirm : c
           ),
         }))
+
+        if (import.meta.env.MODE !== 'test' && conv.backendConversationId) {
+          try {
+            const confirmRes = await sendChatTurn({
+              message: 'Yes, looks good',
+              input_source: 'text',
+              project_id: conv.backendProjectId,
+              conversation_id: conv.backendConversationId,
+            })
+            const assistantReply: ChatMessage = {
+              id: generateId('msg'),
+              role: 'assistant',
+              createdAt: Date.now(),
+              content: confirmRes.assistant_message,
+            }
+            set((state) => ({
+              isGenerating: false,
+              conversations: state.conversations.map((c) =>
+                c.id === conversationId
+                  ? {
+                      ...c,
+                      backendProjectId: confirmRes.project_id,
+                      backendConversationId: confirmRes.conversation_id,
+                      backendStoryId: confirmRes.story_id ?? c.backendStoryId,
+                      workflowStage: confirmRes.workflow_stage,
+                      updatedAt: Date.now(),
+                      messages: [...c.messages, assistantReply],
+                    }
+                  : c
+              ),
+            }))
+            return
+          } catch {
+            // Fall through cleanly if offline
+          }
+        }
 
         const aiData = await generateConfirmedStory({
           conversation: convWithConfirm,

@@ -20,6 +20,9 @@ from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.dependencies import AppSettings, DbSession
+from app.engines.story_intake import IntakeState, StoryIntakeEngine
+from app.services.llm_service import LLMService
 
 logger = logging.getLogger("cinemind.ai_chat")
 router = APIRouter(prefix="/ai", tags=["AI"])
@@ -754,74 +757,70 @@ def _fallback_natural_message(
     response_model=IntakeAnalyzeResponse,
     status_code=status.HTTP_200_OK,
 )
-async def analyze_story_intake(body: IntakeAnalyzeRequest) -> IntakeAnalyzeResponse:
-    """Analyze a user message internally and return a separate natural conversational reply."""
-    settings = get_settings()
-    if not settings.OPENAI_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="OPENAI_API_KEY is not configured in backend/.env.",
-        )
-
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-    context_summary = (
-        f"Current intake state: {body.current_state.model_dump_json()}\n"
-        f"Latest user message: {body.message}"
+async def analyze_story_intake(
+    body: IntakeAnalyzeRequest,
+    session: DbSession,
+    settings: AppSettings,
+) -> IntakeAnalyzeResponse:
+    """Analyze a user message via StoryIntakeEngine + LLMService returning separated analysis and reply."""
+    existing = IntakeState(
+        story_title=body.current_state.story_title,
+        title_confirmed=bool(body.current_state.story_title),
+        visual_style=body.current_state.visual_style,
+        story_context=body.current_state.story_context,
+        awaiting_confirmation=(body.current_state.status == "awaiting_confirmation"),
     )
+    history = [{"role": m.role, "content": m.content} for m in body.recent_history[-8:]]
+    source = body.input_source if body.input_source in ("text", "voice", "document") else "text"
 
-    openai_messages = [
-        {"role": "system", "content": INTAKE_SYSTEM_PROMPT},
-        *[{"role": m.role, "content": m.content} for m in body.recent_history[-6:]],
-        {"role": "user", "content": context_summary},
-    ]
-
-    try:
-        response = await client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
-            messages=openai_messages,  # type: ignore[arg-type]
-            response_format={"type": "json_object"},
-            max_completion_tokens=800,
-        )
-        raw = response.choices[0].message.content or "{}"
-    except OpenAIError as exc:
-        logger.error("OpenAI intake analyze error: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"OpenAI error: {exc}",
-        ) from exc
-
-    try:
-        data = _extract_json(raw)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="AI intake analyzer returned malformed JSON.",
-        ) from exc
-
-    analysis_raw = data.get("analysis") if isinstance(data.get("analysis"), dict) else data
-    conversation_raw = (
-        data.get("conversation") if isinstance(data.get("conversation"), dict) else {}
+    llm_service = LLMService(session=session, settings=settings)
+    engine = StoryIntakeEngine(llm_service)
+    result = await engine.process_turn(
+        project_id=None,
+        latest_message=body.message,
+        existing_state=existing,
+        history=history,
+        input_source=source,  # type: ignore[arg-type]
     )
+    await session.commit()
 
-    extracted = (
-        analysis_raw.get("extracted_fields")
-        if isinstance(analysis_raw.get("extracted_fields"), dict)
-        else {}
-    )
-    missing_raw = analysis_raw.get("missing_fields")
-    missing = [str(m) for m in missing_raw] if isinstance(missing_raw, list) else []
-    assistant_msg = str(conversation_raw.get("assistant_message") or "").strip()
-
+    assistant_msg = result.assistant_message
     if _looks_like_internal_analysis(assistant_msg):
-        assistant_msg = _fallback_natural_message(extracted, missing, body.current_state)
+        assistant_msg = _fallback_natural_message(
+            {
+                "story_title": {"value": result.intake_state.story_title},
+                "visual_style": {"value": result.intake_state.visual_style},
+                "story_context": {"value": result.intake_state.story_context},
+            },
+            result.missing_fields,
+            body.current_state,
+        )
+
+    next_action = (
+        "request_confirmation"
+        if result.needs_confirmation
+        else (
+            "start_generation"
+            if result.ready_for_story_development
+            else (
+                "ask_title"
+                if result.next_question_field == "story_title"
+                else ("ask_visual_style" if result.next_question_field == "visual_style" else "ask_story_context")
+            )
+        )
+    )
 
     return IntakeAnalyzeResponse(
         analysis=IntakeAnalysisPayload(
             input_source=body.input_source,
-            intent=str(analysis_raw.get("intent") or "create_story"),
-            extracted_fields=extracted,
-            missing_fields=missing,
-            next_action=str(analysis_raw.get("next_action") or "ask_title"),
+            intent=result.intent,
+            extracted_fields={
+                "story_title": {"value": result.intake_state.story_title, "confidence": 0.95 if result.intake_state.story_title else 0.0},
+                "visual_style": {"value": result.intake_state.visual_style, "confidence": 0.95 if result.intake_state.visual_style else 0.0, "details": {}},
+                "story_context": {"value": result.intake_state.story_context, "confidence": 0.95 if result.intake_state.story_context else 0.0},
+            },
+            missing_fields=result.missing_fields,
+            next_action=next_action,
         ),
         conversation=IntakeConversationPayload(
             assistant_message=assistant_msg,

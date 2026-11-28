@@ -312,4 +312,25 @@ describe('useSpeechRecognition', () => {
 
     expect(instance.aborted).toBe(true)
   })
+
+  it('preserves intentional repeated words across natural pauses and exposes unique sessionId', async () => {
+    const { result } = renderHook(() => useSpeechRecognition())
+
+    await act(async () => {
+      await result.current.startRecording()
+    })
+
+    expect(result.current.language).toBe('en-IN')
+    expect(result.current.sessionId).toMatch(/^rec-/)
+
+    const instance = MockSpeechRecognition.instances[0]
+    act(() => {
+      instance.emitResult([
+        { transcript: 'Wolf!', isFinal: true },
+        { transcript: 'Wolf!', isFinal: true },
+      ])
+    })
+
+    expect(result.current.finalTranscript).toBe('Wolf! Wolf!')
+  })
 })

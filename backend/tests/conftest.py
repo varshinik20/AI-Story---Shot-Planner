@@ -19,10 +19,38 @@ os.environ.setdefault(
 )
 
 from app.config import Settings  # noqa: E402
+from app.core.security import create_access_token, generate_csrf_token, hash_password  # noqa: E402
+from app.db import models as _all_models  # noqa: F401, E402
 from app.db.base import Base  # noqa: E402
 from app.db.models import Conversation, Message, Project  # noqa: F401, E402
 from app.db.session import get_db_session  # noqa: E402
+from app.dependencies import get_auth_repository  # noqa: E402
 from app.main import create_application  # noqa: E402
+from app.repositories.auth_repository import AuthorizedCredentialRecord  # noqa: E402
+
+
+class _InMemoryTestAuthRepository:
+    """Fast deterministic AuthRepository stub so non-auth integration tests pass real JWT/CSRF checks."""
+
+    def __init__(self, username: str, password_hash: str) -> None:
+        self.record = AuthorizedCredentialRecord(
+            _id="authorized_account",
+            username=username,
+            password_hash=password_hash,
+            is_active=True,
+            created_at="2026-11-28T00:00:00+00:00",
+            updated_at="2026-11-28T00:00:00+00:00",
+        )
+        self.revoked_jtis: set[str] = set()
+
+    async def get_authorized_account(self) -> AuthorizedCredentialRecord | None:
+        return self.record
+
+    async def is_token_revoked(self, jti: str) -> bool:
+        return jti in self.revoked_jtis
+
+    async def revoke_token(self, *, jti: str, expires_at: object) -> None:
+        self.revoked_jtis.add(jti)
 
 
 def get_test_database_url() -> str:
@@ -103,19 +131,28 @@ async def db_session(pg_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, Non
 
 @pytest_asyncio.fixture
 async def client(pg_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
-    """HTTPX AsyncClient wired to FastAPI with the test PostgreSQL session override."""
+    """HTTPX AsyncClient wired to FastAPI with test PostgreSQL + authenticated session/CSRF."""
     session_factory = async_sessionmaker(
         bind=pg_engine,
         class_=AsyncSession,
         expire_on_commit=False,
         autoflush=False,
     )
+    test_secret = "pytest-local-jwt-secret-key-for-integration-tests"
+    test_username = "test_director"
     test_settings = Settings(
         DATABASE_URL=get_test_database_url(),
         APP_ENV="test",
         LOG_LEVEL="WARNING",
+        JWT_SECRET_KEY=test_secret,
+        AUTH_USERNAME=test_username,
+        AUTH_PASSWORD="TestPassword123!",
     )
     app = create_application(test_settings)
+    auth_repo = _InMemoryTestAuthRepository(
+        username=test_username,
+        password_hash=hash_password("TestPassword123!"),
+    )
 
     async def override_get_db_session() -> AsyncGenerator[AsyncSession, None]:
         async with session_factory() as session:
@@ -127,10 +164,30 @@ async def client(pg_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
             finally:
                 await session.close()
 
+    def override_get_auth_repository() -> _InMemoryTestAuthRepository:
+        return auth_repo
+
+    from app.config import get_settings
+
     app.dependency_overrides[get_db_session] = override_get_db_session
+    app.dependency_overrides[get_auth_repository] = override_get_auth_repository
+    app.dependency_overrides[get_settings] = lambda: test_settings
+
+    token, _ = create_access_token(
+        subject=test_username,
+        secret_key=test_secret,
+        algorithm=test_settings.JWT_ALGORITHM,
+        expires_minutes=test_settings.ACCESS_TOKEN_EXPIRE_MINUTES,
+    )
+    csrf_token = generate_csrf_token()
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://testserver",
+        cookies={
+            test_settings.AUTH_COOKIE_NAME: token,
+            test_settings.CSRF_COOKIE_NAME: csrf_token,
+        },
+        headers={"X-CSRF-Token": csrf_token},
     ) as async_client:
         yield async_client

@@ -210,6 +210,20 @@ pytest -v
 ### Health
 - `GET /health` — Verifies application responsiveness and live PostgreSQL connectivity (`SELECT 1`). Returns `200` when connected or `503` when unavailable.
 
+### Authentication (`/api/v1/auth` — MongoDB `story_planner_auth`)
+- `POST /api/v1/auth/login` — Authenticate with the single authorized credential (`username`, `password`); sets HttpOnly JWT cookie + CSRF cookie (`200` / `401` / `429` / `503`).
+- `GET /api/v1/auth/me` — Verify active session cookie (`200` with `authenticated: true | false`).
+- `POST /api/v1/auth/logout` — Revoke current JWT `jti` in MongoDB and clear cookies (`200`).
+
+Manage or rotate the single authorized account interactively (no public registration or password-change HTTP endpoint exists):
+
+```powershell
+Set-Location backend
+.\.venv\Scripts\python.exe scripts\manage_auth_credential.py status
+.\.venv\Scripts\python.exe scripts\manage_auth_credential.py init
+.\.venv\Scripts\python.exe scripts\manage_auth_credential.py update
+```
+
 ### Projects (`/api/v1/projects`)
 - `POST /api/v1/projects` — Create a project (`201`).
 - `GET /api/v1/projects?limit=20&offset=0` — List projects paginated, ordered by `updated_at DESC` (`200`).

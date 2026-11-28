@@ -47,6 +47,7 @@ export function ChatComposer({
   const prevRecordingStateRef = useRef<string>('idle')
   const usedVoiceRef = useRef(false)
   const ignoreNextCompletionCommitRef = useRef(false)
+  const lastSubmittedSessionIdRef = useRef<string | null>(null)
 
   const {
     isSupported: isSpeechSupported,
@@ -55,6 +56,7 @@ export function ChatComposer({
     completeTranscript,
     error: speechError,
     duration: recordingDuration,
+    sessionId: recordingSessionId,
     startRecording,
     stopRecording,
     resetTranscript,
@@ -165,8 +167,18 @@ export function ChatComposer({
 
   const handleSubmit = () => {
     if (!canSend) return
+    if (
+      usedVoiceRef.current &&
+      recordingSessionId &&
+      lastSubmittedSessionIdRef.current === recordingSessionId
+    ) {
+      return
+    }
     const finalMessageText = text
     const inputSource: 'text' | 'voice' = usedVoiceRef.current ? 'voice' : 'text'
+    if (usedVoiceRef.current && recordingSessionId) {
+      lastSubmittedSessionIdRef.current = recordingSessionId
+    }
     if (isListeningOrStopping) {
       ignoreNextCompletionCommitRef.current = true
       stopRecording()
@@ -257,6 +269,7 @@ export function ChatComposer({
       size: file.size,
       type: mappedType,
       previewText,
+      rawFile: file,
     })
   }
 

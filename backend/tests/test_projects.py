@@ -97,26 +97,17 @@ async def test_delete_project_and_missing_project(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_invalid_project_input_rejected() -> None:
-    app = create_application(
-        Settings(
-            DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/cinemind_test_db",
-            APP_ENV="test",
-            LOG_LEVEL="WARNING",
-        )
+async def test_invalid_project_input_rejected(
+    client: AsyncClient,
+) -> None:
+    empty_title_res = await client.post(
+        "/api/v1/projects",
+        json={"title": "   ", "description": "Blank title"},
     )
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://testserver",
-    ) as async_client:
-        empty_title_res = await async_client.post(
-            "/api/v1/projects",
-            json={"title": "   ", "description": "Blank title"},
-        )
-        missing_title_res = await async_client.post(
-            "/api/v1/projects",
-            json={"description": "Missing title"},
-        )
+    missing_title_res = await client.post(
+        "/api/v1/projects",
+        json={"description": "Missing title"},
+    )
 
     assert empty_title_res.status_code == 422
     assert empty_title_res.json()["error"]["code"] == "VALIDATION_ERROR"

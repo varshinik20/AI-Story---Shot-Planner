@@ -7,6 +7,7 @@ import { LoadingIndicator } from '@/components/common/LoadingIndicator'
 import { SuggestionChips } from './SuggestionChips'
 import { MessageBubble } from './MessageBubble'
 import { ChatComposer } from './ChatComposer'
+import { CinemindWorkflowPanel } from '@/components/planner/CinemindWorkflowPanel'
 
 interface ChatWindowProps {
   conversationId?: string
@@ -89,6 +90,14 @@ export function ChatWindow({ conversationId }: ChatWindowProps) {
                 message={msg}
               />
             ))}
+
+            {activeConv.backendProjectId && (
+              <CinemindWorkflowPanel
+                projectId={activeConv.backendProjectId}
+                storyId={activeConv.backendStoryId}
+                workflowStage={activeConv.workflowStage}
+              />
+            )}
 
             {isGenerating && <LoadingIndicator />}
             <div ref={bottomRef} className="h-4" />

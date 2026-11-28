@@ -10,14 +10,17 @@ from app.api.v1.router import api_router
 from app.config import Settings, get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import configure_logging
+from app.core.rate_limit import LoginRateLimiter
+from app.db.mongodb import MongoAuthDatabase
 from app.db.session import dispose_engine, get_engine
+from app.services.auth_init_service import AuthInitService
 
 logger = logging.getLogger("cinemind.app")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Initialize engine resources on startup and dispose cleanly on shutdown."""
+    """Initialize PostgreSQL & MongoDB auth resources on startup and dispose cleanly on shutdown."""
     settings: Settings = app.state.settings
     logger.info(
         "Starting %s backend (env=%s)",
@@ -25,9 +28,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.APP_ENV,
     )
     get_engine()
+    await AuthInitService(app.state.mongo_auth_db, settings).initialize()
     try:
         yield
     finally:
+        await app.state.mongo_auth_db.close()
         await dispose_engine()
         logger.info("%s backend shut down cleanly.", settings.APP_NAME)
 
@@ -49,6 +54,16 @@ def create_application(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = app_settings
+    app.state.mongo_auth_db = MongoAuthDatabase(
+        url=app_settings.MONGODB_URL,
+        database_name=app_settings.MONGODB_DATABASE,
+        collection_name=app_settings.MONGODB_COLLECTION,
+        connect_timeout_ms=app_settings.MONGODB_CONNECT_TIMEOUT_MS,
+    )
+    app.state.login_rate_limiter = LoginRateLimiter(
+        max_attempts=app_settings.AUTH_RATE_LIMIT_ATTEMPTS,
+        window_seconds=app_settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+    )
 
     app.add_middleware(
         CORSMiddleware,

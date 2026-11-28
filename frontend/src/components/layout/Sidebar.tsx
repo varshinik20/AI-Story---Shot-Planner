@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   FolderKanban,
+  LogOut,
   MessageSquare,
   PanelLeftClose,
   Plus,
@@ -13,6 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/store/authStore'
 import { useChatStore } from '@/store/chatStore'
 import { useProjectStore } from '@/store/projectStore'
 import { MOCK_PROJECTS } from '@/data/mockConversations'
@@ -48,6 +50,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
   } = useChatStore()
 
   const { defaultVideoFormat, defaultFrameRate, setDefaults } = useProjectStore()
+  const { username, logout } = useAuthStore()
 
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
@@ -247,9 +250,9 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
           className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-[#212121] transition-colors hover:bg-[#F1F1F1]"
         >
           <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#212121] text-[11px] font-semibold text-white">
-            SF
+            {(username || 'SF').slice(0, 2).toUpperCase()}
           </span>
-          <span className="truncate font-medium">User account</span>
+          <span className="truncate font-medium">{username || 'User account'}</span>
         </button>
 
         <button
@@ -263,6 +266,18 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
         >
           <Settings className="h-4 w-4 shrink-0" />
           <span>Settings</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            void logout()
+            onCloseMobile()
+          }}
+          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-[#6B7280] transition-colors hover:bg-[#F1F1F1] hover:text-red-600"
+        >
+          <LogOut className="h-4 w-4 shrink-0" />
+          <span>Sign out</span>
         </button>
       </div>
     </div>
@@ -317,7 +332,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
           <DialogHeader>
             <DialogTitle>Creator Account</DialogTitle>
             <DialogDescription>
-              Local StoryForge workspace session (persisted in browser storage).
+              Authenticated StoryForge workspace session.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 pt-1 text-sm">
@@ -326,8 +341,8 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                 <User className="h-5 w-5" />
               </div>
               <div>
-                <p className="font-medium text-[#212121]">StoryForge Creator</p>
-                <p className="text-xs text-[#6B7280]">Hackathon Demo Mode • No API key required</p>
+                <p className="font-medium text-[#212121]">{username || 'StoryForge Creator'}</p>
+                <p className="text-xs text-[#6B7280]">Authenticated via MongoDB HttpOnly session</p>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -338,9 +353,23 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                 </p>
               </div>
               <div className="rounded-lg border border-[#E5E7EB] p-3">
-                <p className="text-[#6B7280]">Storage</p>
-                <p className="mt-0.5 text-base font-semibold text-[#212121]">localStorage</p>
+                <p className="text-[#6B7280]">Session</p>
+                <p className="mt-0.5 text-base font-semibold text-[#212121]">Active</p>
               </div>
+            </div>
+            <div className="flex justify-end border-t border-[#E5E7EB] pt-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setProfileOpen(false)
+                  void logout()
+                }}
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                Sign out
+              </Button>
             </div>
           </div>
         </DialogContent>

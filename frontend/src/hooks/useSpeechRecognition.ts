@@ -9,7 +9,7 @@ import type {
 export const DEFAULT_SPEECH_LANGUAGE = 'en-IN'
 const MAX_UNEXPECTED_RESTARTS = 15
 const RESTART_DELAY_MS = 180
-const STOP_TIMEOUT_MS = 600
+const STOP_TIMEOUT_MS = 1200
 
 export type SpeechRecordingState =
   | 'idle'
@@ -33,6 +33,7 @@ export interface UseSpeechRecognitionReturn {
   error: string | null
   duration: number
   language: string
+  sessionId: string | null
   startRecording: () => Promise<void>
   stopRecording: () => void
   resetTranscript: () => void
@@ -49,9 +50,25 @@ export function mergeTranscriptSegments(base: string, addition: string): string 
   if (!cleanAddition) return base
   const cleanBase = base.trimEnd()
   if (!cleanBase) return cleanAddition
-  if (cleanBase.toLowerCase().endsWith(cleanAddition.toLowerCase())) {
+  // Deduplicate boundary overlap across session restarts only for multi-word chunks or exact full-buffer repeats
+  const additionWords = cleanAddition.toLowerCase().split(/\s+/)
+  if (
+    additionWords.length >= 2 &&
+    cleanBase.toLowerCase().endsWith(cleanAddition.toLowerCase())
+  ) {
     return cleanBase
   }
+  if (cleanBase.toLowerCase() === cleanAddition.toLowerCase() && cleanBase.includes(' ')) {
+    return cleanBase
+  }
+  return `${cleanBase} ${cleanAddition}`
+}
+
+function appendResultSegment(base: string, addition: string): string {
+  const cleanAddition = addition.trim()
+  if (!cleanAddition) return base
+  const cleanBase = base.trimEnd()
+  if (!cleanBase) return cleanAddition
   return `${cleanBase} ${cleanAddition}`
 }
 
@@ -83,6 +100,7 @@ export function useSpeechRecognition(
   const [interimTranscript, setInterimTranscript] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [duration, setDuration] = useState(0)
+  const [sessionId, setSessionId] = useState<string | null>(null)
 
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null)
   const recordingStateRef = useRef<SpeechRecordingState>('idle')
@@ -229,9 +247,9 @@ export function useSpeechRecognition(
         if (!transcriptPiece) continue
 
         if (result.isFinal) {
-          instanceFinal = mergeTranscriptSegments(instanceFinal, transcriptPiece)
+          instanceFinal = appendResultSegment(instanceFinal, transcriptPiece)
         } else {
-          instanceInterim = mergeTranscriptSegments(instanceInterim, transcriptPiece)
+          instanceInterim = appendResultSegment(instanceInterim, transcriptPiece)
         }
       }
 
@@ -355,6 +373,7 @@ export function useSpeechRecognition(
     setFinalTranscript('')
     setInterimTranscript('')
     setDuration(0)
+    setSessionId(`rec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`)
     committedFinalRef.current = ''
     currentInstanceFinalRef.current = ''
     currentInstanceInterimRef.current = ''
@@ -453,6 +472,7 @@ export function useSpeechRecognition(
     error,
     duration,
     language,
+    sessionId,
     startRecording,
     stopRecording,
     resetTranscript,

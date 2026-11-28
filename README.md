@@ -6,17 +6,22 @@
 
 ```text
 .
-├── frontend/               # React 18 + TypeScript + Vite ChatGPT-style UI
-├── backend/                # FastAPI + PostgreSQL + SQLAlchemy 2.x (Async) + Alembic
+├── frontend/               # React 18 + TypeScript + Vite ChatGPT-style UI + Login Gate
+├── backend/                # FastAPI + PostgreSQL (Story/Planner) + MongoDB (Single-Credential Auth)
 ├── docs/
 │   ├── architecture.md     # Modular monolith & engine integration architecture
 │   └── implementation_plan.md
 └── .gitignore
 ```
 
+## Database Responsibilities
+
+- **MongoDB (`story_planner_auth`)**: Exclusively stores the single authorized login account (`authorized_credentials`, `_id: "authorized_account"`) with Argon2id password hashes and JWT revocation tokens (`revoked_tokens`).
+- **PostgreSQL (`cinemind_db`)**: Exclusively stores CINEMIND application data (projects, conversations, messages, stories, scenes, shots, continuity, and usage records).
+
 ## Quick Links
 
 - **Frontend setup:** See `frontend/package.json` (`npm run dev` on `http://localhost:5173`)
-- **Backend setup & Windows PowerShell guide:** See [backend/README.md](backend/README.md)
+- **Backend, MongoDB Auth & Windows PowerShell guide:** See [backend/README.md](backend/README.md)
 - **Architecture:** See [docs/architecture.md](docs/architecture.md)
 - **Roadmap:** See [docs/implementation_plan.md](docs/implementation_plan.md)

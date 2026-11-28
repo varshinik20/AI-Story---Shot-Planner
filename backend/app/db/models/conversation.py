@@ -1,9 +1,9 @@
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, ForeignKey, String, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.constants import CONVERSATION_TITLE_MAX_LENGTH, ConversationStatus
@@ -40,6 +40,17 @@ class Conversation(Base):
         default=ConversationStatus.ACTIVE.value,
         server_default=ConversationStatus.ACTIVE.value,
         index=True,
+    )
+    workflow_stage: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="intake",
+        server_default="intake",
+        index=True,
+    )
+    intake_state: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

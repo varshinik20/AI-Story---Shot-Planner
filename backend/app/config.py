@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = 1800
 
     OPENAI_API_KEY: str = Field(
-        ...,
+        default="",
         description="OpenAI API key for GPT-4o story and shot-plan generation.",
     )
     OPENAI_MODEL: str = Field(
@@ -46,6 +46,88 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str | None = Field(
         default=None,
         description="Google Gemini API key for scene reference image generation.",
+    )
+    LLM_PROVIDER: str = Field(
+        default="openai",
+        description="Active LLM provider adapter name.",
+    )
+    LLM_TIMEOUT_SECONDS: float = Field(
+        default=120.0,
+        description="HTTP/SDK timeout in seconds for each LLM request.",
+    )
+    LLM_MAX_RETRIES: int = Field(
+        default=2,
+        description="Maximum retry attempts on transient LLM errors.",
+    )
+    LLM_MAX_TOKENS: int = Field(
+        default=8192,
+        description="Default maximum completion tokens per LLM call.",
+    )
+
+    SCORING_WEIGHT_EMOTION: float = 0.35
+    SCORING_WEIGHT_NARRATIVE: float = 0.25
+    SCORING_WEIGHT_DIRECTOR: float = 0.20
+    SCORING_WEIGHT_CONTINUITY: float = 0.20
+
+    UPLOAD_MAX_BYTES: int = 10 * 1024 * 1024
+
+    MONGODB_URL: str = Field(
+        default="mongodb://localhost:27017",
+        description="MongoDB connection URL used exclusively for authentication.",
+    )
+    MONGODB_DATABASE: str = Field(
+        default="story_planner_auth",
+        description="MongoDB database name storing authorized credentials.",
+    )
+    MONGODB_COLLECTION: str = Field(
+        default="authorized_credentials",
+        description="MongoDB collection storing the single authorized account.",
+    )
+    MONGODB_CONNECT_TIMEOUT_MS: int = Field(
+        default=5000,
+        ge=500,
+        description="MongoDB connection timeout in milliseconds.",
+    )
+
+    AUTH_USERNAME: str = Field(
+        default="",
+        description="Initial single authorized login username (used only when bootstrapping).",
+    )
+    AUTH_PASSWORD: str = Field(
+        default="",
+        description="Initial single authorized login password (hashed with Argon2id before saving).",
+    )
+    JWT_SECRET_KEY: str = Field(
+        default="",
+        description="HMAC secret key used to sign JWT session cookies.",
+    )
+    JWT_ALGORITHM: str = Field(
+        default="HS256",
+        description="JWT signing algorithm.",
+    )
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
+        default=60,
+        ge=1,
+        le=1440,
+        description="JWT and HttpOnly cookie lifetime in minutes.",
+    )
+    AUTH_COOKIE_NAME: str = Field(
+        default="storyforge_session",
+        description="Cookie name storing the signed JWT session token.",
+    )
+    CSRF_COOKIE_NAME: str = Field(
+        default="storyforge_csrf",
+        description="Double-submit CSRF cookie paired with X-CSRF-Token header.",
+    )
+    AUTH_RATE_LIMIT_ATTEMPTS: int = Field(
+        default=5,
+        ge=1,
+        description="Maximum login attempts per client IP inside the rate-limit window.",
+    )
+    AUTH_RATE_LIMIT_WINDOW_SECONDS: int = Field(
+        default=300,
+        ge=10,
+        description="Rate-limit sliding window duration in seconds.",
     )
 
     CORS_ORIGINS: list[str] = Field(
@@ -76,6 +158,24 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DATABASE_URL must use the postgresql+asyncpg:// driver scheme."
             )
+        return cleaned
+
+    @field_validator("MONGODB_URL")
+    @classmethod
+    def validate_mongodb_url(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned.startswith(("mongodb://", "mongodb+srv://")):
+            raise ValueError(
+                "MONGODB_URL must use the mongodb:// or mongodb+srv:// scheme."
+            )
+        return cleaned
+
+    @field_validator("JWT_ALGORITHM")
+    @classmethod
+    def validate_jwt_algorithm(cls, value: str) -> str:
+        cleaned = value.strip().upper()
+        if cleaned not in {"HS256", "HS384", "HS512"}:
+            raise ValueError("JWT_ALGORITHM must be one of HS256, HS384, or HS512.")
         return cleaned
 
 

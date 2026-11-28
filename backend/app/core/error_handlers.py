@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.exceptions import CineMindException
+from app.core.exceptions import CineMindException, RateLimitExceededError
 
 logger = logging.getLogger("cinemind.errors")
 
@@ -26,9 +26,13 @@ async def cinemind_exception_handler(
         exc.status_code,
         exc.message,
     )
+    headers: dict[str, str] = {}
+    if isinstance(exc, RateLimitExceededError):
+        headers["Retry-After"] = str(exc.retry_after_seconds)
     return JSONResponse(
         status_code=exc.status_code,
         content=_error_payload(exc.code, exc.message),
+        headers=headers or None,
     )
 
 
