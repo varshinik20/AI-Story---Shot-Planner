@@ -13,6 +13,7 @@ from app.core.exceptions import ConversationNotFoundError
 from app.db.models.domain import Story
 from app.dependencies import AppSettings, DbSession
 from app.engines.story_intake import IntakeState, StoryIntakeEngine
+from app.orchestrator import StoryToPlannerOrchestrator, is_uninterpretable_input
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.message_repository import MessageRepository
 from app.repositories.project_repository import ProjectRepository
@@ -30,6 +31,7 @@ class UnifiedChatMessageRequest(BaseModel):
     conversation_id: uuid.UUID | None = None
     story_title: str | None = None
     visual_style: str | None = None
+    auto_pipeline: bool = True
 
 
 class UnifiedChatMessageResponse(BaseModel):
@@ -45,6 +47,10 @@ class UnifiedChatMessageResponse(BaseModel):
     next_question_field: str | None
     ready_for_story_development: bool
     needs_confirmation: bool
+    planner_ready: bool = False
+    scene_count: int | None = None
+    shot_count: int | None = None
+    total_runtime_seconds: int | None = None
     assistant_message: str
     suggested_titles: list[str] = Field(default_factory=list)
     style_options: list[str] = Field(default_factory=list)
@@ -104,6 +110,128 @@ async def send_chat_message(
     )
 
     llm_service = LLMService(session=session, settings=settings)
+
+    existing_story = (
+        await session.execute(select(Story).where(Story.conversation_id == conversation.id).order_by(Story.created_at.desc()))
+    ).scalars().first()
+
+    if payload.auto_pipeline:
+        if existing_story is None and is_uninterpretable_input(payload.message):
+            clarification = (
+                "Share any one-line story idea, concept, character, or scenario — "
+                "for example, \"The girl chased her dream.\" — and I'll develop the full story, scenes, and shot planner PDF."
+            )
+            existing_state.last_assistant_question = clarification
+            conversation.intake_state = existing_state.model_dump()
+            assistant_msg = await msg_repo.create(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=clarification,
+                message_type="clarification",
+                metadata={"intent": "clarification", "planner_ready": False},
+            )
+            await session.commit()
+            return UnifiedChatMessageResponse(
+                project_id=project.id,
+                conversation_id=conversation.id,
+                story_id=None,
+                workflow_stage=conversation.workflow_stage,
+                intent="clarification",
+                intake_state=existing_state,
+                missing_fields=[],
+                next_question_field=None,
+                ready_for_story_development=False,
+                needs_confirmation=False,
+                planner_ready=False,
+                assistant_message=clarification,
+                user_message_id=user_msg.id,
+                assistant_message_id=assistant_msg.id,
+            )
+
+        orchestrator = StoryToPlannerOrchestrator(
+            session=session,
+            settings=settings,
+            llm_service=llm_service,
+        )
+        if existing_story is None:
+            orch_res = await orchestrator.generate_from_idea(
+                project=project,
+                conversation=conversation,
+                user_input=payload.message,
+                input_source=payload.input_source,
+                explicit_title=payload.story_title,
+                explicit_visual_style=payload.visual_style,
+            )
+            assistant_msg = await msg_repo.create(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=orch_res.assistant_message,
+                message_type="planner_generated",
+                metadata={
+                    "intent": "auto_story_to_planner",
+                    "story_id": str(orch_res.story.id),
+                    "planner_ready": True,
+                    "scene_count": orch_res.scene_count,
+                    "shot_count": orch_res.shot_count,
+                    "total_runtime_seconds": orch_res.total_runtime_seconds,
+                },
+            )
+            await session.commit()
+            return UnifiedChatMessageResponse(
+                project_id=project.id,
+                conversation_id=conversation.id,
+                story_id=orch_res.story.id,
+                workflow_stage=conversation.workflow_stage,
+                intent="auto_story_to_planner",
+                intake_state=orch_res.intake_state,
+                missing_fields=[],
+                next_question_field=None,
+                ready_for_story_development=True,
+                needs_confirmation=False,
+                planner_ready=True,
+                scene_count=orch_res.scene_count,
+                shot_count=orch_res.shot_count,
+                total_runtime_seconds=orch_res.total_runtime_seconds,
+                assistant_message=orch_res.assistant_message,
+                user_message_id=user_msg.id,
+                assistant_message_id=assistant_msg.id,
+            )
+
+        reply_msg, updated_state = await orchestrator.apply_creator_followup(
+            project=project,
+            conversation=conversation,
+            story=existing_story,
+            instruction=payload.message,
+        )
+        assistant_msg = await msg_repo.create(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=reply_msg,
+            message_type="planner_followup",
+            metadata={
+                "intent": "edit_details",
+                "story_id": str(existing_story.id),
+                "planner_ready": True,
+            },
+        )
+        await session.commit()
+        return UnifiedChatMessageResponse(
+            project_id=project.id,
+            conversation_id=conversation.id,
+            story_id=existing_story.id,
+            workflow_stage=conversation.workflow_stage,
+            intent="edit_details",
+            intake_state=updated_state,
+            missing_fields=[],
+            next_question_field=None,
+            ready_for_story_development=True,
+            needs_confirmation=False,
+            planner_ready=True,
+            assistant_message=reply_msg,
+            user_message_id=user_msg.id,
+            assistant_message_id=assistant_msg.id,
+        )
+
     intake_engine = StoryIntakeEngine(llm_service)
     result = await intake_engine.process_turn(
         project_id=project.id,
@@ -148,9 +276,6 @@ async def send_chat_message(
 
     # Create initial Story row automatically once intake is confirmed (never duplicate per conversation)
     created_story_id: uuid.UUID | None = None
-    existing_story = (
-        await session.execute(select(Story).where(Story.conversation_id == conversation.id).order_by(Story.created_at.desc()))
-    ).scalars().first()
     if existing_story is not None:
         created_story_id = existing_story.id
     elif result.ready_for_story_development and new_state.story_context:

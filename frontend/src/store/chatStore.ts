@@ -284,67 +284,61 @@ export const useChatStore = create<ChatState>()(
               return convId!
             }
 
-            if (
-              !freshConv.workflowStage ||
-              freshConv.workflowStage === 'intake' ||
-              freshConv.workflowStage === 'intake_confirmation'
-            ) {
-              const turnRes = await sendChatTurn({
-                message: trimmed,
-                input_source: options?.inputSource ?? 'text',
-                project_id: freshConv.backendProjectId,
-                conversation_id: freshConv.backendConversationId,
-              })
-              const mappedIntake = toLocalIntakeState(
-                freshConv.id,
-                freshConv.projectId,
-                turnRes.intake_state,
-                turnRes.ready_for_story_development,
-                turnRes.needs_confirmation
-              )
-              storyIntakePersistence.save(mappedIntake)
+            const turnRes = await sendChatTurn({
+              message: trimmed,
+              input_source: options?.inputSource ?? 'text',
+              project_id: freshConv.backendProjectId,
+              conversation_id: freshConv.backendConversationId,
+            })
+            const mappedIntake = toLocalIntakeState(
+              freshConv.id,
+              freshConv.projectId,
+              turnRes.intake_state,
+              turnRes.ready_for_story_development,
+              turnRes.needs_confirmation
+            )
+            storyIntakePersistence.save(mappedIntake)
 
-              const titleOpts = turnRes.suggested_titles.map((label) => ({
-                id: generateId('opt'),
-                label,
-                action: 'send' as const,
-              }))
-              const assistantMsg: ChatMessage = {
-                id: generateId('msg'),
-                role: 'assistant',
-                createdAt: Date.now(),
-                content: turnRes.assistant_message,
-                showStyleSuggestions: turnRes.style_options.length > 0,
-                intakeConfirmation: turnRes.needs_confirmation ? mappedIntake : undefined,
-                options: titleOpts.length > 0 ? titleOpts : undefined,
-              }
-
-              set((state) => ({
-                isGenerating: false,
-                conversations: state.conversations.map((c) =>
-                  c.id !== convId
-                    ? c
-                    : {
-                        ...c,
-                        title: turnRes.intake_state.story_title || c.title,
-                        backendProjectId: turnRes.project_id,
-                        backendConversationId: turnRes.conversation_id,
-                        backendStoryId: turnRes.story_id ?? c.backendStoryId,
-                        workflowStage: turnRes.workflow_stage,
-                        intakeState: mappedIntake,
-                        updatedAt: Date.now(),
-                        storyDraft: {
-                          ...c.storyDraft,
-                          title: turnRes.intake_state.story_title || '',
-                          visualStyle: turnRes.intake_state.visual_style || undefined,
-                          premise: turnRes.intake_state.story_context || c.storyDraft.premise,
-                        },
-                        messages: [...c.messages, assistantMsg],
-                      }
-                ),
-              }))
-              return convId!
+            const titleOpts = turnRes.suggested_titles.map((label) => ({
+              id: generateId('opt'),
+              label,
+              action: 'send' as const,
+            }))
+            const assistantMsg: ChatMessage = {
+              id: generateId('msg'),
+              role: 'assistant',
+              createdAt: Date.now(),
+              content: turnRes.assistant_message,
+              showStyleSuggestions: turnRes.style_options.length > 0,
+              intakeConfirmation: turnRes.needs_confirmation ? mappedIntake : undefined,
+              options: titleOpts.length > 0 ? titleOpts : undefined,
             }
+
+            set((state) => ({
+              isGenerating: false,
+              conversations: state.conversations.map((c) =>
+                c.id !== convId
+                  ? c
+                  : {
+                      ...c,
+                      title: turnRes.intake_state.story_title || c.title,
+                      backendProjectId: turnRes.project_id,
+                      backendConversationId: turnRes.conversation_id,
+                      backendStoryId: turnRes.story_id ?? c.backendStoryId,
+                      workflowStage: turnRes.workflow_stage,
+                      intakeState: mappedIntake,
+                      updatedAt: Date.now(),
+                      storyDraft: {
+                        ...c.storyDraft,
+                        title: turnRes.intake_state.story_title || '',
+                        visualStyle: turnRes.intake_state.visual_style || undefined,
+                        premise: turnRes.intake_state.story_context || c.storyDraft.premise,
+                      },
+                      messages: [...c.messages, assistantMsg],
+                    }
+              ),
+            }))
+            return convId!
           } catch (err) {
             const errMsg: ChatMessage = {
               id: generateId('msg'),

@@ -223,6 +223,10 @@ export interface UnifiedChatResponse {
   next_question_field: string | null
   ready_for_story_development: boolean
   needs_confirmation: boolean
+  planner_ready?: boolean
+  scene_count?: number | null
+  shot_count?: number | null
+  total_runtime_seconds?: number | null
   assistant_message: string
   suggested_titles: string[]
   style_options: string[]
@@ -528,6 +532,32 @@ export async function approveStoryApi(
   return requestJson<BackendStoryDetail>('/api/v1/stories/approve', {
     method: 'POST',
     body: JSON.stringify({ story_id: storyId, edited_content: editedContent }),
+  })
+}
+
+export async function updateStoryDetailsApi(
+  storyId: string,
+  payload: {
+    title?: string
+    genre?: string
+    visual_style?: string
+    working_content?: string
+    rebuild_planner?: boolean
+  }
+): Promise<BackendStoryDetail> {
+  return requestJson<BackendStoryDetail>(`/api/v1/stories/${storyId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function regenerateSingleShotApi(
+  shotUuid: string,
+  instruction?: string
+): Promise<BackendShot> {
+  return requestJson<BackendShot>(`/api/v1/shots/${shotUuid}/regenerate`, {
+    method: 'POST',
+    body: JSON.stringify({ instruction }),
   })
 }
 

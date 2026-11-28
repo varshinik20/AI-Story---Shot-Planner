@@ -360,6 +360,9 @@ async def get_planner_workspace(
         shots_by_scene.setdefault(sh.scene_uuid, []).append(sh)
 
     final_approved = any(a.gate == "final_shot_plan" and a.approved for a in approvals)
+    total_runtime = sum(sh.duration_seconds for sh in shots)
+    total_dialogue_lines = sum(len(sh.dialogue or []) for sh in shots)
+    story_struct = (story.structure_json or {}) if story else {}
     return {
         "project": {
             "id": str(project.id),
@@ -367,14 +370,28 @@ async def get_planner_workspace(
             "description": project.description,
             "status": project.status,
         },
+        "summary": {
+            "scene_count": len(scenes),
+            "shot_count": len(shots),
+            "dialogue_lines_count": total_dialogue_lines,
+            "total_runtime_seconds": total_runtime,
+            "character_count": len(characters),
+            "location_count": len(locations),
+            "production_format": str((intent.interview_answers or {}).get("production_format") if intent else "16:9 · 24 FPS"),
+        },
         "story": (
             {
                 "id": str(story.id),
                 "title": story.title,
                 "visual_style": story.visual_style,
+                "genre": story_struct.get("genre"),
+                "logline": story_struct.get("logline") or story.premise,
+                "central_theme": story_struct.get("central_theme"),
                 "working_content": story.working_content,
                 "approved_content": story.approved_content,
                 "status": story.status,
+                "structure_json": story.structure_json,
+                "suggestions": [],
             }
             if story
             else None
@@ -399,6 +416,7 @@ async def get_planner_workspace(
                 "character_code": c.character_code,
                 "name": c.name,
                 "role": c.role,
+                "age_range": c.age_range,
                 "physical_appearance": c.physical_appearance,
                 "clothing": c.clothing,
                 "personality": c.personality,
@@ -414,6 +432,7 @@ async def get_planner_workspace(
                 "location_code": l.location_code,
                 "name": l.name,
                 "description": l.description,
+                "environment": l.environment,
                 "lighting_characteristics": l.lighting_characteristics,
                 "time_of_day": l.time_of_day,
                 "visual_elements": l.visual_elements or [],

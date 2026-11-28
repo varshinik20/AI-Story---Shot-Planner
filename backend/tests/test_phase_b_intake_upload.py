@@ -155,12 +155,13 @@ async def test_cliff_fall_intake_preserves_context_without_inventing_title(
 
         mock_llm_cls.side_effect = _make_llm
 
-        # Turn 1: Typed text cliff-fall request
+        # Turn 1: Typed text cliff-fall request (explicit legacy intake mode)
         r1 = await client.post(
             "/api/v1/chat/message",
             json={
                 "message": "The girl was running towards the edge of the cliff and fell down. Now create a story.",
                 "input_source": "text",
+                "auto_pipeline": False,
             },
         )
         assert r1.status_code == 200
@@ -180,6 +181,7 @@ async def test_cliff_fall_intake_preserves_context_without_inventing_title(
                 "input_source": "voice",
                 "project_id": d1["project_id"],
                 "conversation_id": d1["conversation_id"],
+                "auto_pipeline": False,
             },
         )
         assert r2.status_code == 200
@@ -198,6 +200,7 @@ async def test_cliff_fall_intake_preserves_context_without_inventing_title(
                 "input_source": "text",
                 "project_id": d1["project_id"],
                 "conversation_id": d1["conversation_id"],
+                "auto_pipeline": False,
             },
         )
         assert r3.status_code == 200
@@ -214,6 +217,7 @@ async def test_cliff_fall_intake_preserves_context_without_inventing_title(
                 "input_source": "text",
                 "project_id": d1["project_id"],
                 "conversation_id": d1["conversation_id"],
+                "auto_pipeline": False,
             },
         )
         assert r4.status_code == 200
@@ -262,6 +266,7 @@ async def test_story_upload_docx_and_missing_key_error(
         )
         res = await client.post(
             "/api/v1/stories/upload",
+            data={"auto_pipeline": "false"},
             files={
                 "file": (
                     "elena.docx",

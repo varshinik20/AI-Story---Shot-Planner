@@ -117,7 +117,7 @@ def _derive_creators_intent_rows(
         or "Dramatic cause and consequence"
     )
 
-    return [
+    rows = [
         ("Visual style", str(visual_style)),
         ("Overall atmosphere", str(atmosphere)),
         ("Character treatment", str(char_treatment)),
@@ -126,6 +126,9 @@ def _derive_creators_intent_rows(
         ("Desired ending experience", str(ending_exp)),
         ("Central theme", str(central_theme)),
     ]
+    if structure.get("genre"):
+        rows.insert(0, ("Genre", str(structure["genre"])))
+    return rows
 
 
 class PlannerPDFService:
@@ -255,6 +258,9 @@ class PlannerPDFService:
             ]
         ]
         for ch in characters:
+            role_text = ch.role
+            if ch.age_range:
+                role_text = f"{role_text}\nAge: {ch.age_range}"
             look_text = ch.physical_appearance
             if ch.clothing:
                 look_text = f"{look_text} Clothing: {ch.clothing}"
@@ -262,7 +268,7 @@ class PlannerPDFService:
             char_rows.append(
                 [
                     Paragraph(esc_html(ch.name), styles.cell_bold),
-                    Paragraph(esc_html(ch.role), styles.cell_normal),
+                    Paragraph(esc_html(role_text), styles.cell_normal),
                     Paragraph(esc_html(look_text), styles.cell_normal),
                     Paragraph(esc_html(pv_text), styles.cell_normal),
                 ]
@@ -281,6 +287,10 @@ class PlannerPDFService:
         ]
         for loc in locations:
             desc_parts = [loc.description]
+            if loc.environment:
+                desc_parts.append(f"Atmosphere: {loc.environment}")
+            if loc.time_of_day:
+                desc_parts.append(f"Time: {loc.time_of_day}")
             if loc.lighting_characteristics:
                 desc_parts.append(f"Lighting: {loc.lighting_characteristics}")
             if loc.visual_elements:

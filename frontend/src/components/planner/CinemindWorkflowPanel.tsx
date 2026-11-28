@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -8,9 +8,12 @@ import {
   Film,
   GitBranch,
   Loader2,
+  MapPin,
   Pencil,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
+  Users,
   Wand2,
   X,
 } from 'lucide-react'
@@ -30,9 +33,11 @@ import {
   getPlannerWorkspaceApi,
   getProjectUsageApi,
   interviewIntentApi,
+  regenerateSingleShotApi,
   resolveValidationIssueApi,
   runValidationApi,
   updateShotApi,
+  updateStoryDetailsApi,
   type BackendScene,
   type BackendShot,
   type BackendStoryDetail,
@@ -43,6 +48,39 @@ import {
   type ValidationReportResponse,
 } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+
+interface WorkspaceSummary {
+  scene_count: number
+  shot_count: number
+  dialogue_lines_count: number
+  total_runtime_seconds: number
+  character_count: number
+  location_count: number
+  production_format: string
+}
+
+interface WorkspaceCharacter {
+  id: string
+  character_code: string
+  name: string
+  role: string
+  age_range?: string | null
+  physical_appearance: string
+  clothing?: string | null
+  personality: string
+  voice_characteristics: string
+}
+
+interface WorkspaceLocation {
+  id: string
+  location_code: string
+  name: string
+  description: string
+  environment?: string | null
+  lighting_characteristics?: string | null
+  time_of_day?: string | null
+  visual_elements: string[]
+}
 
 interface CinemindWorkflowPanelProps {
   projectId: string
@@ -57,8 +95,14 @@ export function CinemindWorkflowPanel({
 }: CinemindWorkflowPanelProps) {
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const [story, setStory] = useState<BackendStoryDetail | null>(null)
+  const [story, setStory] = useState<(BackendStoryDetail & { genre?: string; logline?: string; central_theme?: string }) | null>(null)
+  const [summary, setSummary] = useState<WorkspaceSummary | null>(null)
+  const [characters, setCharacters] = useState<WorkspaceCharacter[]>([])
+  const [locations, setLocations] = useState<WorkspaceLocation[]>([])
   const [editingStory, setEditingStory] = useState(false)
+  const [draftTitle, setDraftTitle] = useState('')
+  const [draftGenre, setDraftGenre] = useState('')
+  const [draftStyle, setDraftStyle] = useState('')
   const [draftStoryText, setDraftStoryText] = useState('')
   const [intentState, setIntentState] = useState<CreativeIntentResponse | null>(null)
   const [narrative, setNarrative] = useState<NarrativeAnalysisResponse | null>(null)
@@ -73,30 +117,61 @@ export function CinemindWorkflowPanel({
   const [usage, setUsage] = useState<ProjectUsageResponse | null>(null)
   const [showUsage, setShowUsage] = useState(false)
 
-  useEffect(() => {
-    let active = true
-    getPlannerWorkspaceApi(projectId)
-      .then((ws: Record<string, unknown>) => {
-        if (!active) return
-        const s = ws.story as BackendStoryDetail | null
-        if (s) {
-          setStory(s)
-          setDraftStoryText(s.working_content || '')
-        }
-        if (Array.isArray(ws.scenes)) {
-          setScenes(ws.scenes as BackendScene[])
-        }
-        if (ws.final_approved) {
-          setPlannerApproved(true)
-        }
-      })
-      .catch(() => {
-        // Hydrate silently if project is fresh
-      })
-    return () => {
-      active = false
+  const hydrateWorkspace = useCallback(async () => {
+    try {
+      const ws = await getPlannerWorkspaceApi(projectId)
+      const s = ws.story as (BackendStoryDetail & { genre?: string; logline?: string; central_theme?: string }) | null
+      if (s) {
+        setStory(s)
+        setDraftTitle(s.title || '')
+        setDraftGenre(s.genre || '')
+        setDraftStyle(s.visual_style || '')
+        setDraftStoryText(s.approved_content || s.working_content || '')
+      }
+      if (ws.summary) {
+        setSummary(ws.summary as WorkspaceSummary)
+      }
+      if (Array.isArray(ws.characters)) {
+        setCharacters(ws.characters as WorkspaceCharacter[])
+      }
+      if (Array.isArray(ws.locations)) {
+        setLocations(ws.locations as WorkspaceLocation[])
+      }
+      if (ws.creative_intent) {
+        const ci = ws.creative_intent as Record<string, unknown>
+        setIntentState({
+          project_id: projectId,
+          creative_intent: {
+            id: projectId,
+            project_id: projectId,
+            visual_style: (ci.visual_style as string) ?? null,
+            overall_mood: (ci.overall_mood as string) ?? null,
+            pacing: (ci.pacing as string) ?? null,
+            lighting: (ci.lighting as string) ?? null,
+            camera_preferences: (ci.camera_preferences as string) ?? null,
+            audience_experience: (ci.audience_experience as string) ?? null,
+            ending_tone: (ci.ending_tone as string) ?? null,
+            is_complete: Boolean(ci.is_complete),
+          },
+          missing_dimensions: [],
+          is_complete: Boolean(ci.is_complete),
+          next_question: null,
+          target_dimension: null,
+          quick_options: [],
+        })
+      }
+      if (Array.isArray(ws.scenes)) {
+        setScenes(ws.scenes as BackendScene[])
+      }
+      setPlannerApproved(Boolean(ws.final_approved))
+    } catch {
+      // Hydrate silently if project is fresh
     }
-  }, [projectId, workflowStage])
+  }, [projectId])
+
+  useEffect(() => {
+    void hydrateWorkspace()
+  }, [hydrateWorkspace, workflowStage, storyId])
 
   const runAction = async (label: string, fn: () => Promise<void>) => {
     setBusyAction(label)
@@ -238,6 +313,31 @@ export function CinemindWorkflowPanel({
       await downloadPlannerPdfApi(projectId)
     })
 
+  const handleSaveStoryUpdates = (rebuildPlanner: boolean) =>
+    runAction(rebuildPlanner ? 'Save Story & Rebuild Planner' : 'Save Story Updates', async () => {
+      if (!story) return
+      await updateStoryDetailsApi(story.id, {
+        title: draftTitle,
+        genre: draftGenre,
+        visual_style: draftStyle,
+        working_content: draftStoryText,
+        rebuild_planner: rebuildPlanner,
+      })
+      setEditingStory(false)
+      await hydrateWorkspace()
+    })
+
+  const handleRegenerateSingleShot = (shotUuid: string) =>
+    runAction('Regenerate Shot', async () => {
+      const updated = await regenerateSingleShotApi(shotUuid)
+      setScenes((prev) =>
+        prev.map((sc) => ({
+          ...sc,
+          shots: sc.shots.map((sh) => (sh.id === shotUuid ? updated : sh)),
+        }))
+      )
+    })
+
   const handleToggleUsage = async () => {
     if (!showUsage) {
       await runAction('Fetch Usage Telemetry', async () => {
@@ -329,61 +429,125 @@ export function CinemindWorkflowPanel({
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busyAction !== null}
+                onClick={handleDevelopStory}
+              >
+                <Sparkles className="mr-1 h-3 w-3" />
+                {story.status === 'approved' ? 'Regenerate Story' : 'Develop Draft'}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setEditingStory((v) => !v)}
+              >
+                <Pencil className="mr-1 h-3 w-3" />
+                {editingStory ? 'Cancel Edit' : 'Edit Story'}
+              </Button>
               {story.status !== 'approved' && (
-                <>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={busyAction !== null}
-                    onClick={handleDevelopStory}
-                  >
-                    <Sparkles className="mr-1 h-3 w-3" />
-                    Develop Draft
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setEditingStory((v) => !v)}
-                  >
-                    <Pencil className="mr-1 h-3 w-3" />
-                    {editingStory ? 'Cancel Edit' : 'Edit Story'}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="accent"
-                    disabled={busyAction !== null}
-                    onClick={handleApproveStory}
-                  >
-                    <CheckCircle2 className="mr-1 h-3 w-3" />
-                    Approve Story
-                  </Button>
-                </>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="accent"
+                  disabled={busyAction !== null}
+                  onClick={handleApproveStory}
+                >
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  Approve Story
+                </Button>
+              )}
+              {plannerApproved && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="accent"
+                  disabled={busyAction !== null}
+                  onClick={handleDownloadPdf}
+                >
+                  <Download className="mr-1 h-3 w-3" />
+                  Export PDF
+                </Button>
               )}
             </div>
           </div>
 
+          {summary && (
+            <div className="flex flex-wrap gap-3 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-3 py-2 text-[11px] font-medium text-[#374151]">
+              {story.genre && <span>Genre: <strong>{story.genre}</strong></span>}
+              <span>Scenes: <strong>{summary.scene_count}</strong></span>
+              <span>Shots: <strong>{summary.shot_count}</strong></span>
+              <span>Dialogue Lines: <strong>{summary.dialogue_lines_count}</strong></span>
+              <span>Runtime: <strong>{summary.total_runtime_seconds}s</strong></span>
+              <span>Format: <strong>{summary.production_format}</strong></span>
+            </div>
+          )}
+
           {editingStory ? (
-            <textarea
-              value={draftStoryText}
-              onChange={(e) => setDraftStoryText(e.target.value)}
-              rows={5}
-              className="w-full rounded-lg border border-[#D1D5DB] p-2.5 text-xs text-[#212121] focus:border-[#10A37F] focus:outline-none"
-            />
+            <div className="space-y-2.5">
+              <div className="grid gap-2 sm:grid-cols-3">
+                <input
+                  value={draftTitle}
+                  onChange={(e) => setDraftTitle(e.target.value)}
+                  placeholder="Story Title"
+                  className="rounded-lg border border-[#D1D5DB] px-2.5 py-1.5 text-xs text-[#212121] focus:border-[#10A37F] focus:outline-none"
+                />
+                <input
+                  value={draftGenre}
+                  onChange={(e) => setDraftGenre(e.target.value)}
+                  placeholder="Genre (e.g. Sci-Fi Drama)"
+                  className="rounded-lg border border-[#D1D5DB] px-2.5 py-1.5 text-xs text-[#212121] focus:border-[#10A37F] focus:outline-none"
+                />
+                <input
+                  value={draftStyle}
+                  onChange={(e) => setDraftStyle(e.target.value)}
+                  placeholder="Visual Style"
+                  className="rounded-lg border border-[#D1D5DB] px-2.5 py-1.5 text-xs text-[#212121] focus:border-[#10A37F] focus:outline-none"
+                />
+              </div>
+              <textarea
+                value={draftStoryText}
+                onChange={(e) => setDraftStoryText(e.target.value)}
+                rows={6}
+                className="w-full rounded-lg border border-[#D1D5DB] p-2.5 text-xs text-[#212121] focus:border-[#10A37F] focus:outline-none"
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busyAction !== null}
+                  onClick={() => void handleSaveStoryUpdates(false)}
+                >
+                  Save Changes
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="accent"
+                  disabled={busyAction !== null}
+                  onClick={() => void handleSaveStoryUpdates(true)}
+                >
+                  <RefreshCw className="mr-1 h-3 w-3" />
+                  Save &amp; Rebuild Scenes/Shots
+                </Button>
+              </div>
+            </div>
           ) : (
             <p className="whitespace-pre-wrap text-xs leading-relaxed text-[#374151]">
               {story.approved_content || story.working_content}
             </p>
           )}
 
-          {story.suggestions.filter((s) => s.status === 'pending').length > 0 && (
+          {(story.suggestions ?? []).filter((s) => s.status === 'pending').length > 0 && (
             <div className="space-y-2 border-t border-[#E5E7EB] pt-2.5">
               <div className="text-[11px] font-semibold uppercase tracking-wide text-[#6B7280]">
                 AI Suggestions (Accept or Reject)
               </div>
-              {story.suggestions.map((sg) => (
+              {(story.suggestions ?? []).map((sg) => (
                 <div key={sg.id} className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-2.5 text-xs">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-semibold text-[#212121]">{sg.section_title}</span>
@@ -491,6 +655,59 @@ export function CinemindWorkflowPanel({
                 </Button>
               )}
             </>
+          )}
+        </div>
+      )}
+
+      {/* Characters & Locations Profiles */}
+      {(characters.length > 0 || locations.length > 0) && (
+        <div className="grid gap-3 md:grid-cols-2">
+          {characters.length > 0 && (
+            <div className="space-y-2 rounded-xl border border-[#E5E7EB] bg-white p-3.5 text-xs">
+              <div className="flex items-center gap-1.5 font-semibold text-[#212121]">
+                <Users className="h-3.5 w-3.5 text-[#10A37F]" />
+                <span>Characters ({characters.length})</span>
+              </div>
+              <div className="space-y-2">
+                {characters.map((ch) => (
+                  <div key={ch.id} className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-2">
+                    <div className="font-semibold text-[#212121]">
+                      {ch.name} · <span className="font-normal text-[#6B7280]">{ch.role}{ch.age_range ? ` (${ch.age_range})` : ''}</span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-[#4B5563]">
+                      {ch.physical_appearance}{ch.clothing ? ` Clothing: ${ch.clothing}` : ''}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-[#6B7280]">
+                      {ch.personality} · Voice: {ch.voice_characteristics}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {locations.length > 0 && (
+            <div className="space-y-2 rounded-xl border border-[#E5E7EB] bg-white p-3.5 text-xs">
+              <div className="flex items-center gap-1.5 font-semibold text-[#212121]">
+                <MapPin className="h-3.5 w-3.5 text-[#10A37F]" />
+                <span>Locations ({locations.length})</span>
+              </div>
+              <div className="space-y-2">
+                {locations.map((loc) => (
+                  <div key={loc.id} className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-2">
+                    <div className="font-semibold text-[#212121]">
+                      {loc.name}{loc.time_of_day ? ` · ${loc.time_of_day}` : ''}
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-[#4B5563]">{loc.description}</p>
+                    {(loc.environment || loc.lighting_characteristics) && (
+                      <p className="mt-0.5 text-[11px] text-[#6B7280]">
+                        {[loc.environment, loc.lighting_characteristics].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -643,6 +860,14 @@ export function CinemindWorkflowPanel({
                         className="rounded border border-[#E5E7EB] px-2 py-0.5 text-[11px] hover:bg-slate-50"
                       >
                         Edit
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyAction !== null}
+                        onClick={() => void handleRegenerateSingleShot(sh.id)}
+                        className="inline-flex items-center gap-1 rounded border border-[#E5E7EB] px-2 py-0.5 text-[11px] hover:bg-slate-50"
+                      >
+                        <RefreshCw className="h-3 w-3" /> Regenerate Shot
                       </button>
                       <button
                         type="button"

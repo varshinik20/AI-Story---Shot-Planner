@@ -6,9 +6,11 @@ import uuid
 
 from fastapi import APIRouter, File, Form, UploadFile, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
-from app.core.exceptions import ProjectNotFoundError
-from app.db.models.domain import Story
+from app.core.exceptions import NotFoundError, ProjectNotFoundError
+from app.db.models.domain import CreativeIntent, Story
+from app.db.models.project import Project
 from app.dependencies import AppSettings, DbSession
 from app.engines.story_development import StoryDevelopmentEngine
 from app.engines.story_development.schemas import (
@@ -18,6 +20,7 @@ from app.engines.story_development.schemas import (
     SuggestionDecisionRequest,
 )
 from app.engines.story_intake import IntakeState, StoryIntakeEngine
+from app.orchestrator import StoryToPlannerOrchestrator
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.message_repository import MessageRepository
 from app.repositories.project_repository import ProjectRepository
@@ -61,6 +64,7 @@ async def upload_story_document(
     conversation_id: uuid.UUID | None = Form(default=None),
     story_title: str | None = Form(default=None),
     visual_style: str | None = Form(default=None),
+    auto_pipeline: bool = Form(default=True),
 ) -> StoryUploadResponse:
     raw_bytes = await file.read()
     doc_service = DocumentService(max_bytes=settings.UPLOAD_MAX_BYTES)
@@ -114,6 +118,54 @@ async def upload_story_document(
     )
 
     llm_service = LLMService(session=session, settings=settings)
+
+    if auto_pipeline:
+        orchestrator = StoryToPlannerOrchestrator(
+            session=session,
+            settings=settings,
+            llm_service=llm_service,
+        )
+        orch_res = await orchestrator.generate_from_idea(
+            project=project,
+            conversation=conversation,
+            user_input=extracted.extracted_text,
+            input_source="document",
+            explicit_title=story_title,
+            explicit_visual_style=visual_style,
+            preserve_story_text=extracted.extracted_text,
+        )
+        await msg_repo.create(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=orch_res.assistant_message,
+            message_type="planner_generated",
+            metadata={
+                "intent": "auto_story_to_planner",
+                "story_id": str(orch_res.story.id),
+                "planner_ready": True,
+                "scene_count": orch_res.scene_count,
+                "shot_count": orch_res.shot_count,
+            },
+        )
+        await session.commit()
+        return StoryUploadResponse(
+            project_id=project.id,
+            conversation_id=conversation.id,
+            story_id=orch_res.story.id,
+            filename=extracted.filename,
+            file_type=extracted.file_type,
+            word_count=extracted.word_count,
+            page_count=extracted.page_count,
+            extracted_text=extracted.extracted_text,
+            workflow_stage=conversation.workflow_stage,
+            intake_state=orch_res.intake_state,
+            missing_fields=[],
+            needs_confirmation=False,
+            ready_for_story_development=True,
+            assistant_message=orch_res.assistant_message,
+            style_options=[],
+        )
+
     intake_engine = StoryIntakeEngine(llm_service)
     result = await intake_engine.process_turn(
         project_id=project.id,
@@ -243,6 +295,62 @@ async def approve_story(
         story_id=payload.story_id,
         edited_content=payload.edited_content,
     )
+
+
+class UpdateStoryMetadataRequest(BaseModel):
+    title: str | None = None
+    genre: str | None = None
+    visual_style: str | None = None
+    working_content: str | None = None
+    rebuild_planner: bool = False
+
+
+@router.patch(
+    "/{story_id}",
+    response_model=StoryDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update story title, genre, visual style, or text and optionally rebuild planner",
+)
+async def update_story_details(
+    story_id: uuid.UUID,
+    payload: UpdateStoryMetadataRequest,
+    session: DbSession,
+    settings: AppSettings,
+) -> StoryDetailResponse:
+    story = (await session.execute(select(Story).where(Story.id == story_id))).scalar_one_or_none()
+    if story is None:
+        raise NotFoundError("Story not found.", code="STORY_NOT_FOUND")
+    project = (await session.execute(select(Project).where(Project.id == story.project_id))).scalar_one_or_none()
+
+    if payload.title and payload.title.strip():
+        story.title = payload.title.strip()
+        if project is not None:
+            project.title = payload.title.strip()
+    if payload.visual_style and payload.visual_style.strip():
+        story.visual_style = payload.visual_style.strip()
+        intent = (
+            await session.execute(select(CreativeIntent).where(CreativeIntent.project_id == story.project_id))
+        ).scalar_one_or_none()
+        if intent is not None:
+            intent.visual_style = payload.visual_style.strip()
+    if payload.genre and payload.genre.strip():
+        struct = dict(story.structure_json or {})
+        struct["genre"] = payload.genre.strip()
+        story.structure_json = struct
+    if payload.working_content and payload.working_content.strip():
+        story.working_content = payload.working_content.strip()
+        if story.status == "approved":
+            story.approved_content = payload.working_content.strip()
+
+    await session.commit()
+
+    llm = LLMService(session=session, settings=settings)
+    if payload.rebuild_planner and project is not None:
+        orchestrator = StoryToPlannerOrchestrator(session=session, settings=settings, llm_service=llm)
+        await orchestrator.regenerate_full_planner(project=project, story=story)
+
+    engine = StoryDevelopmentEngine(session=session, llm_service=llm)
+    return await engine.get_story_detail(story_id)
 
 
 @router.get(

@@ -21,6 +21,29 @@ class AlternativesRequest(BaseModel):
     creative_prompt: str | None = None
 
 
+class RegenerateShotRequest(BaseModel):
+    instruction: str | None = None
+
+
+@router.post(
+    "/{shot_uuid}/regenerate",
+    status_code=status.HTTP_200_OK,
+    summary="Regenerate a single shot cleanly while preserving story dialogue and scene consistency",
+)
+async def regenerate_single_shot(
+    shot_uuid: uuid.UUID,
+    payload: RegenerateShotRequest,
+    session: DbSession,
+    settings: AppSettings,
+) -> dict[str, Any]:
+    llm = LLMService(session=session, settings=settings)
+    engine = ProductionEngine(session=session, settings=settings, llm_service=llm)
+    return await engine.regenerate_single_shot(
+        shot_uuid=shot_uuid,
+        instruction=payload.instruction,
+    )
+
+
 @router.post(
     "/generate",
     response_model=SceneOut,

@@ -136,7 +136,7 @@ async def test_mixed_voice_and_text_intake_regression_and_reload_persistence(
         # Turn 1 (Voice): missing all 3 fields; leaked assistant text replaced cleanly by natural fallback
         r1 = await client.post(
             "/api/v1/chat/message",
-            json={"message": "Tell me a story.", "input_source": "voice"},
+            json={"message": "Tell me a story.", "input_source": "voice", "auto_pipeline": False},
         )
         assert r1.status_code == 200
         d1 = r1.json()
@@ -152,7 +152,7 @@ async def test_mixed_voice_and_text_intake_regression_and_reload_persistence(
         # Turn 2 (Typed)
         r2 = await client.post(
             "/api/v1/chat/message",
-            json={"message": "The Shadow Within.", "input_source": "text", "project_id": pid, "conversation_id": cid},
+            json={"message": "The Shadow Within.", "input_source": "text", "project_id": pid, "conversation_id": cid, "auto_pipeline": False},
         )
         d2 = r2.json()
         assert d2["intake_state"]["story_title"] == "The Shadow Within"
@@ -161,7 +161,7 @@ async def test_mixed_voice_and_text_intake_regression_and_reload_persistence(
         # Turn 3 (Voice)
         r3 = await client.post(
             "/api/v1/chat/message",
-            json={"message": "Dark fantasy.", "input_source": "voice", "project_id": pid, "conversation_id": cid},
+            json={"message": "Dark fantasy.", "input_source": "voice", "project_id": pid, "conversation_id": cid, "auto_pipeline": False},
         )
         d3 = r3.json()
         assert d3["intake_state"]["visual_style"] == "Dark fantasy"
@@ -175,6 +175,7 @@ async def test_mixed_voice_and_text_intake_regression_and_reload_persistence(
                 "input_source": "voice",
                 "project_id": pid,
                 "conversation_id": cid,
+                "auto_pipeline": False,
             },
         )
         d4 = r4.json()
@@ -191,6 +192,7 @@ async def test_mixed_voice_and_text_intake_regression_and_reload_persistence(
                 "input_source": "voice",
                 "project_id": pid,
                 "conversation_id": cid,
+                "auto_pipeline": False,
             },
         )
         d5 = r5.json()
@@ -202,7 +204,7 @@ async def test_mixed_voice_and_text_intake_regression_and_reload_persistence(
         # Turn 6 (Confirmation phrase "Let's start.") -> creates single Story row & returns story_id
         r6 = await client.post(
             "/api/v1/chat/message",
-            json={"message": "Let's start.", "input_source": "text", "project_id": pid, "conversation_id": cid},
+            json={"message": "Let's start.", "input_source": "text", "project_id": pid, "conversation_id": cid, "auto_pipeline": False},
         )
         assert r6.status_code == 200
         d6 = r6.json()
@@ -215,7 +217,7 @@ async def test_mixed_voice_and_text_intake_regression_and_reload_persistence(
         # Duplicate confirmation does NOT create duplicate Story row
         r7 = await client.post(
             "/api/v1/chat/message",
-            json={"message": "Yes", "input_source": "text", "project_id": pid, "conversation_id": cid},
+            json={"message": "Yes", "input_source": "text", "project_id": pid, "conversation_id": cid, "auto_pipeline": False},
         )
         assert r7.status_code == 200
         assert r7.json()["story_id"] == d6["story_id"]

@@ -58,21 +58,66 @@ Follow the Part 11 Shot Data Contract strictly for each shot in this scene:
 Return strict JSON matching the schema."""
 
 
+def _norm_compare(value: str) -> str:
+    cleaned = (
+        value.replace("\u2018", "'")
+        .replace("\u2019", "'")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2014", "--")
+    )
+    return re.sub(r"\s+", " ", cleaned).strip().lower()
+
+
 def _normalize_dialogue_against_story(
     dialogue_items: list[dict[str, str]],
     approved_story_text: str,
 ) -> list[dict[str, str]]:
     """Deterministic guard: strip any invented spoken line not found in the approved story."""
-    story_lower = re.sub(r"\s+", " ", approved_story_text).lower()
+    story_lower = _norm_compare(approved_story_text)
     verified: list[dict[str, str]] = []
     for item in dialogue_items:
         line = (item.get("exact_line") or "").strip().strip('"\'“”')
         if not line:
             continue
-        clean_line = re.sub(r"\s+", " ", line).lower()
-        if clean_line in story_lower:
+        clean_line = _norm_compare(line)
+        clean_no_punct = re.sub(r"[.!?,;:]+$", "", clean_line).strip()
+        if clean_line in story_lower or (clean_no_punct and clean_no_punct in story_lower):
             verified.append(item)
     return verified
+
+
+def _canonicalize_location(raw_location: str, known_loc_names: list[str], fallback: str) -> str:
+    candidate = raw_location.strip()
+    if not known_loc_names:
+        return candidate or fallback
+    for k in known_loc_names:
+        if k.lower() == candidate.lower() or k.lower() in candidate.lower() or candidate.lower() in k.lower():
+            return k
+    return fallback if fallback in known_loc_names else known_loc_names[0]
+
+
+def _canonicalize_characters(raw_chars: list[str], known_char_names: list[str]) -> list[str]:
+    if not known_char_names:
+        return [c.strip() for c in raw_chars if c.strip()]
+    matched: list[str] = []
+    for ref in raw_chars:
+        clean_ref = ref.strip()
+        if not clean_ref:
+            continue
+        canonical = next(
+            (
+                k
+                for k in known_char_names
+                if k.lower() == clean_ref.lower()
+                or clean_ref.lower() in k.lower()
+                or k.lower() in clean_ref.lower()
+            ),
+            None,
+        )
+        if canonical and canonical not in matched:
+            matched.append(canonical)
+    return matched
 
 
 def serialize_shot(shot: Shot) -> dict[str, Any]:
@@ -393,6 +438,9 @@ class ProductionEngine:
                 previous_shot=prev_shot_dict,
             )
 
+            known_loc_names = [l.name for l in locations if l.name]
+            known_char_names = [c.name for c in characters if c.name]
+
             shot_row = Shot(
                 project_id=project_id,
                 scene_uuid=scene.id,
@@ -401,8 +449,8 @@ class ProductionEngine:
                 duration_seconds=item.duration_seconds,
                 framing=item.framing.strip(),
                 camera={"angle": item.camera.angle.strip(), "movement": item.camera.movement.strip()},
-                characters=item.characters,
-                location=item.location.strip() or scene.location,
+                characters=_canonicalize_characters(item.characters, known_char_names),
+                location=_canonicalize_location(item.location, known_loc_names, scene.location),
                 visual_description=item.visual_description.strip(),
                 dialogue=safe_dialogue,
                 emotion=item.emotion.strip(),
@@ -446,6 +494,98 @@ class ProductionEngine:
             if key in allowed and value is not None:
                 setattr(shot, key, value)
 
+        await self.session.commit()
+        await self.session.refresh(shot)
+        return serialize_shot(shot)
+
+    async def regenerate_single_shot(
+        self,
+        *,
+        shot_uuid: uuid.UUID,
+        instruction: str | None = None,
+    ) -> dict[str, Any]:
+        """Regenerate ONE individual shot cleanly while preserving story dialogue & scene continuity."""
+        shot = (await self.session.execute(select(Shot).where(Shot.id == shot_uuid))).scalar_one_or_none()
+        if shot is None:
+            raise NotFoundError("Shot not found.", code="SHOT_NOT_FOUND")
+        scene = (await self.session.execute(select(Scene).where(Scene.id == shot.scene_uuid))).scalar_one_or_none()
+        if scene is None:
+            raise NotFoundError("Parent scene not found.", code="SCENE_NOT_FOUND")
+
+        story = (
+            await self.session.execute(
+                select(Story).where(Story.project_id == shot.project_id).order_by(Story.created_at.desc())
+            )
+        ).scalars().first()
+        approved_story_text = (story.approved_content or story.working_content or story.original_content) if story else ""
+        intent = (
+            await self.session.execute(select(CreativeIntent).where(CreativeIntent.project_id == shot.project_id))
+        ).scalar_one_or_none()
+        characters = (await self.session.execute(select(Character).where(Character.project_id == shot.project_id))).scalars().all()
+        locations = (await self.session.execute(select(Location).where(Location.project_id == shot.project_id))).scalars().all()
+        known_loc_names = [l.name for l in locations if l.name]
+        known_char_names = [c.name for c in characters if c.name]
+
+        intent_dict = {
+            "visual_style": intent.visual_style if intent else (story.visual_style if story else None),
+            "overall_mood": intent.overall_mood if intent else None,
+            "pacing": intent.pacing if intent else None,
+            "lighting": intent.lighting if intent else None,
+            "camera_preferences": intent.camera_preferences if intent else None,
+        }
+
+        prompt = (
+            f"Regenerate ONLY single shot {shot.shot_id} inside Scene {scene.scene_id} ({scene.title}, {scene.location}, {scene.time_of_day}).\n"
+            f"Current Shot: framing={shot.framing}, camera={shot.camera}, duration={shot.duration_seconds}s, "
+            f"emotion={shot.emotion}, visual={shot.visual_description}, dialogue={shot.dialogue}\n"
+            f"Creator Direction for Regeneration: {instruction or 'Create a fresh, stronger cinematic composition fitting the scene and emotion.'}\n"
+            f"Characters available: {known_char_names}\n"
+            f"Locations available: {known_loc_names}\n"
+            f"Approved Story Text (ONLY source for verbatim dialogue):\n{approved_story_text}\n\n"
+            "Return JSON matching LLMSceneShotsPayload with exactly 1 shot item."
+        )
+        payload, _ = await self.llm.generate_json(
+            messages=[
+                {"role": "system", "content": SHOT_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            schema_model=LLMSceneShotsPayload,
+            engine="production",
+            operation="regenerate_single_shot",
+            project_id=shot.project_id,
+            scene_id=scene.scene_id,
+            shot_id=shot.shot_id,
+            temperature=0.45,
+            max_tokens=1100,
+        )
+        item = payload.shots[0]
+        raw_dialogue = [d.model_dump() for d in item.dialogue]
+        safe_dialogue = _normalize_dialogue_against_story(raw_dialogue, approved_story_text)
+        scored = self.reasoning.score_candidate(
+            ShotTreatmentCandidate(
+                label=shot.shot_id,
+                framing=item.framing,
+                camera_angle=item.camera.angle,
+                camera_movement=item.camera.movement,
+                duration_seconds=item.duration_seconds,
+                lighting_note=intent_dict.get("lighting") or scene.time_of_day,
+                rationale=item.visual_description,
+            ),
+            emotion=item.emotion,
+            intensity=0.7,
+            narrative_role="dramatic_beat",
+            creative_intent=intent_dict,
+        )
+        shot.duration_seconds = item.duration_seconds
+        shot.framing = item.framing.strip()
+        shot.camera = {"angle": item.camera.angle.strip(), "movement": item.camera.movement.strip()}
+        shot.characters = _canonicalize_characters(item.characters, known_char_names)
+        shot.location = _canonicalize_location(item.location, known_loc_names, scene.location)
+        shot.visual_description = item.visual_description.strip()
+        shot.dialogue = safe_dialogue
+        shot.emotion = item.emotion.strip()
+        shot.sound = item.sound.strip()
+        shot.reasoning = scored.model_dump()
         await self.session.commit()
         await self.session.refresh(shot)
         return serialize_shot(shot)
